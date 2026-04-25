@@ -27,6 +27,25 @@ const requestHeaderCache = Object.create(null);
 
 let logsCache = null;
 
+const NATIVE_HOST_NAME = 'com.video_catcher.host';
+const NATIVE_REQUEST_TIMEOUT_MS = 30000;
+const NATIVE_DEFAULT_OUTPUT_DIR = '%USERPROFILE%\\Downloads\\Video Catcher';
+
+let nativePort = null;
+let nativeRequestCounter = 0;
+
+const nativePending = new Map();
+const nativeState = {
+  installed: false,
+  connected: false,
+  hostVersion: '',
+  tools: null,
+  activeJob: null,
+  lastProgress: null,
+  lastError: '',
+  lastChecked: 0
+};
+
 function loadLogs(callback) {
   if (logsCache) {
     callback(logsCache);
@@ -241,6 +260,251 @@ function getActiveTab(callback) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     callback(tabs[0] || null);
   });
+}
+
+function cloneNativeState() {
+  return {
+    installed: Boolean(nativeState.installed),
+    connected: Boolean(nativeState.connected),
+    hostVersion: nativeState.hostVersion || '',
+    tools: nativeState.tools,
+    activeJob: nativeState.activeJob,
+    lastProgress: nativeState.lastProgress,
+    lastError: nativeState.lastError || '',
+    lastChecked: nativeState.lastChecked || 0
+  };
+}
+
+function resolvePendingNativeRequest(id, response) {
+  if (!id || !nativePending.has(id)) return false;
+  const pending = nativePending.get(id);
+  nativePending.delete(id);
+  clearTimeout(pending.timer);
+  pending.resolve(response);
+  return true;
+}
+
+function rejectPendingNativeRequests(error) {
+  nativePending.forEach((pending) => {
+    clearTimeout(pending.timer);
+    pending.resolve({ ok: false, error, state: cloneNativeState() });
+  });
+  nativePending.clear();
+}
+
+function disconnectNativePort(error = '') {
+  nativePort = null;
+  nativeState.connected = false;
+  nativeState.installed = false;
+  nativeState.lastError = sanitizeText(error || 'Host nativo no conectado', 220);
+  rejectPendingNativeRequests(nativeState.lastError);
+}
+
+function handleNativeMessage(message) {
+  if (!message || typeof message !== 'object') return;
+
+  if (message.type === 'ready') {
+    nativeState.installed = true;
+    nativeState.connected = true;
+    nativeState.hostVersion = sanitizeText(message.hostVersion || '', 32);
+    nativeState.lastError = '';
+    return;
+  }
+
+  if (message.type === 'pong') {
+    nativeState.installed = true;
+    nativeState.connected = true;
+    resolvePendingNativeRequest(message.id, { ok: true, state: cloneNativeState() });
+    return;
+  }
+
+  if (message.type === 'tools') {
+    nativeState.installed = true;
+    nativeState.connected = true;
+    nativeState.hostVersion = sanitizeText(message.hostVersion || nativeState.hostVersion || '', 32);
+    nativeState.tools = {
+      ok: Boolean(message.ok),
+      ytDlp: message.ytDlp || { found: false },
+      ffmpeg: message.ffmpeg || { found: false },
+      missing: Array.isArray(message.missing) ? message.missing.map((item) => sanitizeText(item, 40)) : []
+    };
+    nativeState.lastChecked = Date.now();
+    nativeState.lastError = nativeState.tools.ok ? '' : `Faltan herramientas: ${nativeState.tools.missing.join(', ')}`;
+    resolvePendingNativeRequest(message.id, {
+      ok: Boolean(message.ok),
+      tools: nativeState.tools,
+      state: cloneNativeState()
+    });
+    return;
+  }
+
+  if (message.type === 'started') {
+    nativeState.installed = true;
+    nativeState.connected = true;
+    nativeState.lastError = '';
+    nativeState.activeJob = {
+      id: sanitizeText(message.jobId || '', 80),
+      title: sanitizeText(message.title || 'video', 140),
+      target: sanitizeText(message.target || '', 260),
+      outputDir: sanitizeText(message.outputDir || '', 220),
+      startedAt: Date.now()
+    };
+    nativeState.lastProgress = {
+      jobId: nativeState.activeJob.id,
+      line: 'Descarga Pro iniciada.',
+      percent: null,
+      t: Date.now()
+    };
+    vcLog('info', 'native', `Descarga Pro iniciada: ${nativeState.activeJob.title}`);
+    resolvePendingNativeRequest(message.id, { ok: true, jobId: nativeState.activeJob.id, state: cloneNativeState() });
+    return;
+  }
+
+  if (message.type === 'progress') {
+    nativeState.lastProgress = {
+      jobId: sanitizeText(message.jobId || '', 80),
+      line: sanitizeText(message.line || '', 260),
+      percent: Number.isFinite(message.percent) ? message.percent : null,
+      t: Date.now()
+    };
+    return;
+  }
+
+  if (message.type === 'done') {
+    const outputDir = sanitizeText(message.outputDir || '', 220);
+    nativeState.lastProgress = {
+      jobId: sanitizeText(message.jobId || '', 80),
+      line: outputDir ? `Completado en ${outputDir}` : 'Descarga Pro completada.',
+      percent: 100,
+      t: Date.now()
+    };
+    nativeState.activeJob = null;
+    nativeState.lastError = '';
+    vcLog('ok', 'native', nativeState.lastProgress.line);
+    return;
+  }
+
+  if (message.type === 'cancelled') {
+    nativeState.lastProgress = {
+      jobId: sanitizeText(message.jobId || '', 80),
+      line: 'Descarga Pro cancelada.',
+      percent: null,
+      t: Date.now()
+    };
+    nativeState.activeJob = null;
+    nativeState.lastError = '';
+    resolvePendingNativeRequest(message.id, { ok: true, state: cloneNativeState() });
+    vcLog('warn', 'native', 'Descarga Pro cancelada');
+    return;
+  }
+
+  if (message.type === 'error') {
+    const error = sanitizeText(message.error || 'Error del host nativo', 260);
+    nativeState.lastError = error;
+    if (message.jobId && nativeState.activeJob?.id === message.jobId) nativeState.activeJob = null;
+    nativeState.lastProgress = {
+      jobId: sanitizeText(message.jobId || '', 80),
+      line: error,
+      percent: null,
+      t: Date.now()
+    };
+    resolvePendingNativeRequest(message.id, { ok: false, error, state: cloneNativeState() });
+    vcLog('error', 'native', error);
+  }
+}
+
+function connectNativeHost() {
+  if (nativePort) {
+    nativeState.installed = true;
+    nativeState.connected = true;
+    return { ok: true };
+  }
+
+  try {
+    nativePort = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+    nativePort.onMessage.addListener(handleNativeMessage);
+    nativePort.onDisconnect.addListener(() => {
+      const error = chrome.runtime.lastError?.message || 'Host nativo desconectado';
+      disconnectNativePort(error);
+    });
+    nativeState.installed = true;
+    nativeState.connected = true;
+    nativeState.lastError = '';
+    return { ok: true };
+  } catch (error) {
+    disconnectNativePort(error?.message || 'No se pudo conectar con el host nativo');
+    return { ok: false, error: nativeState.lastError };
+  }
+}
+
+function nativeRequest(type, payload = {}, timeoutMs = NATIVE_REQUEST_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const connection = connectNativeHost();
+    if (!connection.ok || !nativePort) {
+      resolve({ ok: false, error: connection.error || nativeState.lastError, state: cloneNativeState() });
+      return;
+    }
+
+    const id = `native_${Date.now()}_${++nativeRequestCounter}`;
+    const timer = setTimeout(() => {
+      nativePending.delete(id);
+      resolve({ ok: false, error: 'timeout esperando respuesta del host nativo', state: cloneNativeState() });
+    }, timeoutMs);
+
+    nativePending.set(id, { resolve, timer });
+
+    try {
+      nativePort.postMessage({ type, id, ...payload });
+    } catch (error) {
+      nativePending.delete(id);
+      clearTimeout(timer);
+      disconnectNativePort(error?.message || 'No se pudo enviar mensaje al host nativo');
+      resolve({ ok: false, error: nativeState.lastError, state: cloneNativeState() });
+    }
+  });
+}
+
+function buildNativePayload(message, pageUrl) {
+  const mediaUrl = normalizeUrl(message.url);
+  const normalizedPageUrl = normalizeUrl(message.pageUrl) || normalizeUrl(pageUrl) || normalizeUrl(message.referer);
+
+  return {
+    pageUrl: normalizedPageUrl || mediaUrl || '',
+    mediaUrl: mediaUrl || '',
+    title: safeFilename(message.filename, 'video', inferExtension(message.url || '', message.contentType || '', message.kind || 'video')),
+    useCookies: Boolean(message.useCookies),
+    cookiesBrowser: sanitizeText(message.cookiesBrowser || 'brave', 24),
+    outputDir: sanitizeText(message.outputDir || NATIVE_DEFAULT_OUTPUT_DIR, 220),
+    preferPageUrl: message.preferPageUrl !== false
+  };
+}
+
+function startNativeDownload(message, sendResponse) {
+  const explicitTabId = Number.isInteger(message.tabId) ? message.tabId : null;
+  const respond = (tab) => {
+    const payload = buildNativePayload(message, tab?.url || '');
+    if (!isHttpUrl(payload.pageUrl) && !isHttpUrl(payload.mediaUrl)) {
+      sendResponse({ ok: false, error: 'invalid url', state: cloneNativeState() });
+      return;
+    }
+
+    nativeRequest('download', { payload }, 12000).then((response) => {
+      sendResponse(response);
+    });
+  };
+
+  if (explicitTabId !== null) {
+    chrome.tabs.get(explicitTabId, (tab) => {
+      if (chrome.runtime.lastError) {
+        getActiveTab(respond);
+        return;
+      }
+      respond(tab);
+    });
+    return;
+  }
+
+  getActiveTab(respond);
 }
 
 function downloadViaChrome(url, filename, referer, requestHeaders, callback) {
@@ -465,6 +729,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getActiveTab((tab) => {
       if (tab) clearTabState(tab.id, { keepRecording: true });
       sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (message.action === 'getNativeStatus') {
+    sendResponse({ ok: true, state: cloneNativeState() });
+    return true;
+  }
+
+  if (message.action === 'checkNativeHost') {
+    nativeRequest('checkTools').then((response) => {
+      sendResponse({ ...response, state: cloneNativeState() });
+    });
+    return true;
+  }
+
+  if (message.action === 'downloadWithNative') {
+    startNativeDownload(message, sendResponse);
+    return true;
+  }
+
+  if (message.action === 'cancelNativeDownload') {
+    nativeRequest('cancel', { jobId: message.jobId || nativeState.activeJob?.id || null }, 8000).then((response) => {
+      sendResponse({ ...response, state: cloneNativeState() });
     });
     return true;
   }

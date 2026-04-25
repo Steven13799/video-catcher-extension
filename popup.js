@@ -23,6 +23,15 @@ const elements = {
   previewVideo: document.getElementById('preview-video'),
   previewError: document.getElementById('preview-error'),
   previewClose: document.getElementById('preview-close'),
+  nativePanel: document.getElementById('native-panel'),
+  nativeDot: document.getElementById('native-dot'),
+  nativeStatusText: document.getElementById('native-status-text'),
+  nativeToolsText: document.getElementById('native-tools-text'),
+  nativeProgress: document.getElementById('native-progress'),
+  nativeProgressBar: document.getElementById('native-progress-bar'),
+  nativeProgressLine: document.getElementById('native-progress-line'),
+  nativeCheck: document.getElementById('btn-native-check'),
+  nativeCancel: document.getElementById('btn-native-cancel'),
   recordingBanner: document.getElementById('recording-banner'),
   recordingName: document.getElementById('recording-name'),
   recordingTime: document.getElementById('recording-time'),
@@ -32,12 +41,16 @@ const elements = {
 
 const state = {
   activeTabId: null,
+  activeTabUrl: '',
   videos: [],
   debugVisible: false,
   debugLogs: [],
   activePreviewItem: null,
   statusTimer: null,
-  recordingPoll: null
+  recordingPoll: null,
+  nativePoll: null,
+  nativeStatus: null,
+  cookiePrefs: Object.create(null)
 };
 
 function queryActiveTab() {
@@ -78,6 +91,14 @@ function storageGet(key) {
 
 function storageRemove(key) {
   return new Promise((resolve) => previewStorage.remove(key, resolve));
+}
+
+function localStorageGet(key) {
+  return new Promise((resolve) => chrome.storage.local.get(key, (data) => resolve(data[key])));
+}
+
+function localStorageSet(values) {
+  return new Promise((resolve) => chrome.storage.local.set(values, resolve));
 }
 
 function showStatus(message, type = 'info', duration = 2600) {
@@ -171,6 +192,10 @@ function createSvgIcon(name) {
       ['path', { d: 'M12 4v10', stroke: 'currentColor', 'stroke-width': '2.2', 'stroke-linecap': 'round' }],
       ['path', { d: 'm7.5 10 4.5 4.5L16.5 10', stroke: 'currentColor', 'stroke-width': '2.2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }],
       ['path', { d: 'M5 19h14', stroke: 'currentColor', 'stroke-width': '2.2', 'stroke-linecap': 'round' }]
+    ],
+    pro: [
+      ['path', { d: 'M13 2 5 13h6l-1 9 9-13h-6l1-7Z', fill: 'currentColor' }],
+      ['path', { d: 'M18.5 4.5 20 3m-1.5 8.5L20 13m-13.5 5.5L5 20', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', opacity: '0.55' }]
     ],
     copy: [
       ['rect', { x: '8', y: '8', width: '10', height: '10', rx: '2', stroke: 'currentColor', 'stroke-width': '2' }],
@@ -318,6 +343,136 @@ function renderFooter() {
   elements.footer.textContent = `${state.videos.length} recursos detectados - ${direct} directos - ${streams} streams`;
 }
 
+function getVideoHost(video) {
+  const candidates = [state.activeTabUrl, video.referer, video.url];
+  for (const candidate of candidates) {
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.hostname.replace(/^www\./, '').toLowerCase();
+      }
+    } catch {}
+  }
+  return 'default';
+}
+
+async function loadCookiePrefs() {
+  const prefs = await localStorageGet('vc_native_cookie_hosts');
+  state.cookiePrefs = prefs && typeof prefs === 'object' ? prefs : Object.create(null);
+}
+
+async function setCookiePref(host, enabled) {
+  state.cookiePrefs = { ...state.cookiePrefs, [host]: Boolean(enabled) };
+  await localStorageSet({ vc_native_cookie_hosts: state.cookiePrefs });
+}
+
+function nativeToolsReady(status = state.nativeStatus) {
+  return Boolean(status?.tools?.ok || (status?.tools?.ytDlp?.found && status?.tools?.ffmpeg?.found));
+}
+
+function renderNativeStatus(status) {
+  state.nativeStatus = status || null;
+  const activeJob = status?.activeJob || null;
+  const progress = status?.lastProgress || null;
+  const toolsReady = nativeToolsReady(status);
+
+  elements.nativeDot.className = 'native-dot';
+  if (activeJob) {
+    elements.nativeDot.classList.add('busy');
+  } else if (toolsReady) {
+    elements.nativeDot.classList.add('ready');
+  } else if (status?.connected || status?.installed) {
+    elements.nativeDot.classList.add('warn');
+  } else if (status?.lastError) {
+    elements.nativeDot.classList.add('error');
+  }
+
+  if (activeJob) {
+    elements.nativeStatusText.textContent = `Descargando: ${sanitizeText(activeJob.title || 'video', 120)}`;
+  } else if (toolsReady) {
+    elements.nativeStatusText.textContent = 'Host Pro listo para yt-dlp + ffmpeg.';
+  } else if (status?.connected || status?.installed) {
+    elements.nativeStatusText.textContent = status?.lastError || 'Host instalado, pero faltan herramientas.';
+  } else {
+    elements.nativeStatusText.textContent = status?.lastError || 'Host Pro no instalado o no verificado.';
+  }
+
+  if (status?.tools) {
+    const missing = Array.isArray(status.tools.missing) ? status.tools.missing.join(', ') : '';
+    elements.nativeToolsText.textContent = toolsReady
+      ? 'Herramientas detectadas: yt-dlp y ffmpeg.'
+      : `Faltan: ${missing || 'yt-dlp.exe / ffmpeg.exe'}.`;
+  } else {
+    elements.nativeToolsText.textContent = 'Usa Verificar Pro despues de instalar el host local.';
+  }
+
+  if (activeJob || progress?.line) {
+    elements.nativeProgress.classList.add('visible');
+    elements.nativeProgressLine.textContent = sanitizeText(progress?.line || 'Preparando descarga Pro...', 220);
+    const percent = Number.isFinite(progress?.percent) ? Math.max(0, Math.min(100, progress.percent)) : 12;
+    elements.nativeProgressBar.style.width = `${percent}%`;
+  } else {
+    elements.nativeProgress.classList.remove('visible');
+    elements.nativeProgressLine.textContent = '';
+    elements.nativeProgressBar.style.width = '0%';
+  }
+
+  elements.nativeCancel.hidden = !activeJob;
+  elements.nativeCheck.disabled = Boolean(activeJob);
+
+  if (activeJob) startNativePolling();
+}
+
+async function loadNativeStatus(forceCheck = false) {
+  const response = await sendRuntimeMessage({ action: forceCheck ? 'checkNativeHost' : 'getNativeStatus' });
+  renderNativeStatus(response?.state || null);
+  return response;
+}
+
+function startNativePolling() {
+  if (state.nativePoll) return;
+  state.nativePoll = setInterval(async () => {
+    const response = await loadNativeStatus(false);
+    if (!response?.state?.activeJob) {
+      clearInterval(state.nativePoll);
+      state.nativePoll = null;
+    }
+  }, 1000);
+}
+
+async function startNativeDownload(video, useCookies) {
+  const check = nativeToolsReady() ? { ok: true } : await loadNativeStatus(true);
+  if (!nativeToolsReady(check?.state || state.nativeStatus)) {
+    showStatus('Instala o verifica el host Pro con yt-dlp y ffmpeg antes de usar esta descarga.', 'error', 4200);
+    return;
+  }
+
+  const response = await sendRuntimeMessage({
+    action: 'downloadWithNative',
+    url: video.url,
+    pageUrl: state.activeTabUrl || video.referer || video.url,
+    filename: video.filename,
+    kind: video.kind,
+    contentType: video.contentType || '',
+    recordOnly: Boolean(video.recordOnly),
+    referer: video.referer || state.activeTabUrl || '',
+    requestHeaders: video.requestHeaders || [],
+    tabId: state.activeTabId,
+    useCookies: Boolean(useCookies),
+    cookiesBrowser: 'brave',
+    preferPageUrl: true
+  });
+
+  renderNativeStatus(response?.state || state.nativeStatus);
+
+  if (response?.ok) {
+    showStatus('Descarga Pro iniciada con yt-dlp.', 'ok');
+    startNativePolling();
+  } else {
+    showStatus(`No se pudo iniciar Pro: ${response?.error || 'error'}`, 'error', 4800);
+  }
+}
+
 function renderList(videos) {
   state.videos = Array.isArray(videos) ? videos : [];
   elements.count.textContent = state.videos.length ? `(${state.videos.length})` : '';
@@ -436,7 +591,37 @@ function renderList(videos) {
       }, 'download');
     }
 
-    actionsRow.append(copyButton, previewButton, actionButton);
+    const host = getVideoHost(video);
+    const cookieToggle = document.createElement('label');
+    cookieToggle.className = 'cookie-toggle';
+
+    const cookieInput = document.createElement('input');
+    cookieInput.type = 'checkbox';
+    cookieInput.checked = Boolean(state.cookiePrefs[host]);
+    cookieInput.addEventListener('change', async () => {
+      await setCookiePref(host, cookieInput.checked);
+      showStatus(
+        cookieInput.checked
+          ? `Cookies activadas para ${host}.`
+          : `Cookies desactivadas para ${host}.`,
+        'info'
+      );
+    });
+
+    const cookieText = document.createElement('span');
+    cookieText.textContent = 'Cookies';
+    cookieToggle.title = `Permitir --cookies-from-browser brave para ${host}`;
+    cookieToggle.append(cookieInput, cookieText);
+
+    const proButton = createButton('Descargar Pro', 'pro-btn', async () => {
+      proButton.disabled = true;
+      await startNativeDownload(video, cookieInput.checked);
+      proButton.disabled = false;
+    }, 'pro');
+    proButton.title = 'Usa yt-dlp + ffmpeg mediante el host local opcional.';
+    proButton.disabled = Boolean(state.nativeStatus?.activeJob);
+
+    actionsRow.append(copyButton, previewButton, actionButton, proButton, cookieToggle);
     item.append(head, metaRow, actionsRow);
     elements.list.appendChild(item);
   });
@@ -539,7 +724,9 @@ async function loadVideos() {
 async function initialize() {
   const activeTab = await queryActiveTab();
   state.activeTabId = activeTab?.id ?? null;
-  await Promise.all([loadVideos(), loadRecordingState()]);
+  state.activeTabUrl = activeTab?.url || '';
+  await loadCookiePrefs();
+  await Promise.all([loadVideos(), loadRecordingState(), loadNativeStatus(false)]);
 }
 
 elements.clear.addEventListener('click', async () => {
@@ -584,11 +771,34 @@ elements.stopRecording.addEventListener('click', async () => {
   showStatus('Deteniendo grabacion...', 'info');
 });
 
+elements.nativeCheck.addEventListener('click', async () => {
+  elements.nativeCheck.disabled = true;
+  const response = await loadNativeStatus(true);
+  elements.nativeCheck.disabled = Boolean(response?.state?.activeJob);
+
+  if (nativeToolsReady(response?.state)) {
+    showStatus('Host Pro verificado: yt-dlp y ffmpeg listos.', 'ok');
+  } else {
+    showStatus(response?.error || response?.state?.lastError || 'Host Pro no esta listo.', 'error', 4200);
+  }
+});
+
+elements.nativeCancel.addEventListener('click', async () => {
+  const response = await sendRuntimeMessage({
+    action: 'cancelNativeDownload',
+    jobId: state.nativeStatus?.activeJob?.id || null
+  });
+  renderNativeStatus(response?.state || state.nativeStatus);
+  showStatus(response?.ok ? 'Cancelando descarga Pro...' : `No se pudo cancelar: ${response?.error || 'error'}`, response?.ok ? 'info' : 'error');
+});
+
 decorateButton(elements.debugToggle, 'logs');
 decorateButton(elements.clear, 'clear');
 decorateButton(elements.debugCopy, 'copy');
 decorateButton(elements.debugClear, 'clear');
 decorateButton(elements.stopRecording, 'stop');
+decorateButton(elements.nativeCheck, 'pro');
+decorateButton(elements.nativeCancel, 'stop');
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName === 'local' && changes.vc_logs && state.debugVisible) {
@@ -605,6 +815,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 window.addEventListener('beforeunload', () => {
   clearInterval(state.recordingPoll);
+  clearInterval(state.nativePoll);
   clearTimeout(state.statusTimer);
 });
 

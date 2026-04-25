@@ -102,6 +102,7 @@
     .debug-btn,
     .action-btn,
     .record-btn,
+    .pro-btn,
     .stop-btn,
     .mini-btn {
       border: 1px solid transparent;
@@ -164,6 +165,101 @@
       background: rgba(221, 103, 103, 0.1);
       border-color: rgba(221, 103, 103, 0.22);
       color: #ffdede;
+    }
+
+    .native-panel {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 10px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(95, 176, 255, 0.16);
+      background: linear-gradient(180deg, rgba(13, 25, 38, 0.76), rgba(10, 16, 24, 0.72));
+      box-shadow: var(--shadow);
+    }
+
+    .native-top {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+    }
+
+    .native-dot {
+      flex: 0 0 auto;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--muted);
+      box-shadow: 0 0 0 4px rgba(145, 175, 207, 0.09);
+    }
+
+    .native-dot.ready {
+      background: var(--ok);
+      box-shadow: 0 0 0 4px rgba(55, 185, 119, 0.12);
+    }
+
+    .native-dot.busy {
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(95, 176, 255, 0.14);
+      animation: pulse 1.1s ease-in-out infinite;
+    }
+
+    .native-dot.warn {
+      background: var(--warn);
+      box-shadow: 0 0 0 4px rgba(213, 164, 75, 0.12);
+    }
+
+    .native-dot.error {
+      background: var(--danger);
+      box-shadow: 0 0 0 4px rgba(221, 103, 103, 0.12);
+    }
+
+    .native-copy {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .native-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--text);
+    }
+
+    .native-detail {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .native-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .native-progress {
+      display: none;
+      gap: 7px;
+    }
+
+    .native-progress.visible {
+      display: grid;
+    }
+
+    .native-progress-line {
+      color: #cddbea;
+      font-size: 11px;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+
+    .native-progress .progress-bar {
+      background: linear-gradient(90deg, #3be0b2, #5fb0ff);
+      transition: width 0.22s ease;
     }
 
     .recording-banner {
@@ -424,6 +520,7 @@
 
     .action-btn,
     .record-btn,
+    .pro-btn,
     .stop-btn,
     .mini-btn {
       display: inline-flex;
@@ -458,6 +555,17 @@
       transform: translateY(-1px);
     }
 
+    .pro-btn {
+      background: linear-gradient(135deg, #3be0b2, #2196cf);
+      color: #04131d;
+      border-color: rgba(255, 255, 255, 0.13);
+      box-shadow: 0 8px 22px rgba(33, 150, 207, 0.18);
+    }
+
+    .pro-btn:hover {
+      transform: translateY(-1px);
+    }
+
     .record-btn {
       background: rgba(221, 103, 103, 0.14);
       color: #ffd9d9;
@@ -470,11 +578,32 @@
 
     .action-btn:disabled,
     .record-btn:disabled,
+    .pro-btn:disabled,
     .mini-btn:disabled,
     .stop-btn:disabled {
       opacity: 0.55;
       cursor: default;
       transform: none;
+    }
+
+    .cookie-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(145, 175, 207, 0.14);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .cookie-toggle input {
+      accent-color: var(--ok);
     }
 
     .footer {
@@ -559,6 +688,11 @@
       0%, 100% { opacity: 1; }
       50% { opacity: 0.3; }
     }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(0.82); opacity: 0.55; }
+    }
   </style>
 </head>
 <body>
@@ -579,6 +713,27 @@
 
     <main class="content">
       <div class="status" id="status-banner" role="status" aria-live="polite"></div>
+
+      <section class="native-panel" id="native-panel">
+        <div class="native-top">
+          <span class="native-dot" id="native-dot" aria-hidden="true"></span>
+          <div class="native-copy">
+            <div class="native-title">Descarga Pro local</div>
+            <div class="native-detail" id="native-status-text">Host local sin verificar.</div>
+            <div class="native-detail" id="native-tools-text">yt-dlp + ffmpeg opcionales.</div>
+          </div>
+        </div>
+        <div class="native-progress" id="native-progress">
+          <div class="progress-track">
+            <div class="progress-bar" id="native-progress-bar"></div>
+          </div>
+          <div class="native-progress-line" id="native-progress-line"></div>
+        </div>
+        <div class="native-actions">
+          <button type="button" class="mini-btn" id="btn-native-check">Verificar Pro</button>
+          <button type="button" class="stop-btn" id="btn-native-cancel" hidden>Cancelar Pro</button>
+        </div>
+      </section>
 
       <section class="recording-banner" id="recording-banner">
         <div class="recording-top">

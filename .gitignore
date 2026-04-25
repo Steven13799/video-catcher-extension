@@ -7,8 +7,11 @@ desktop.ini
 
 # Dependencies/build output
 node_modules/
+native-host/target/
+native-host/tools/
 dist/
 build/
+.release/
 *.zip
 *.crx
 *.pem

@@ -1,0 +1,9 @@
+{
+  "name": "com.video_catcher.host",
+  "description": "Video Catcher native host for yt-dlp and ffmpeg",
+  "path": "__HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://jjmpkelicjdcdmiiiopaipbpcbnnfalj/"
+  ]
+}

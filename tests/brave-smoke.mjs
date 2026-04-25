@@ -254,6 +254,38 @@ async function run() {
     assert.ok(videos.some((video) => video.url.includes('video.twimg.com')), urls);
     assert.ok(videos.some((video) => video.recordOnly), JSON.stringify(videos, null, 2));
 
+    const nativeStatusResult = await client.send('Runtime.evaluate', {
+      expression: `
+        new Promise((resolve) => chrome.runtime.sendMessage(
+          { action: 'getNativeStatus' },
+          (response) => resolve(response || { ok: false, error: chrome.runtime.lastError?.message })
+        ))
+      `,
+      contextId,
+      awaitPromise: true,
+      returnByValue: true
+    });
+
+    assert.equal(nativeStatusResult.result.value?.ok, true, JSON.stringify(nativeStatusResult.result.value));
+    assert.equal(typeof nativeStatusResult.result.value?.state, 'object');
+
+    if (process.env.VC_CHECK_NATIVE === '1') {
+      const nativeCheckResult = await client.send('Runtime.evaluate', {
+        expression: `
+          new Promise((resolve) => chrome.runtime.sendMessage(
+            { action: 'checkNativeHost' },
+            (response) => resolve(response || { ok: false, error: chrome.runtime.lastError?.message })
+          ))
+        `,
+        contextId,
+        awaitPromise: true,
+        returnByValue: true
+      });
+
+      assert.equal(nativeCheckResult.result.value?.ok, true, JSON.stringify(nativeCheckResult.result.value));
+      assert.equal(nativeCheckResult.result.value?.state?.tools?.ok, true, JSON.stringify(nativeCheckResult.result.value));
+    }
+
     const hlsResult = await client.send('Runtime.evaluate', {
       expression: `
         new Promise((resolve) => chrome.runtime.sendMessage({
