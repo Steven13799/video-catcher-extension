@@ -1,0 +1,24 @@
+# OS/editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Dependencies/build output
+node_modules/
+dist/
+build/
+*.zip
+*.crx
+*.pem
+
+# Local/browser test artifacts
+downloads/
+tmp/
+coverage/
+*.log
+
+# Personal scratch files
+Nuevo Documento de texto.txt
+{icons}/
