@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Video Catcher",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Detecta y descarga videos en la pagina activa",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuRJWKQHoXjjOntrmlsT5TcEIjcaXpa1xswAV5npsDkTolRD2xXw1UzsFeSdXhaR8xPvucjTjpp8k9VTJyXb6qRNlJXFkqwgwRrOo+vI3LUy84czJBHiQ4P2+u9QjVdkv2DFNsl3TDUR1S4ibsO4Bm/FHg1UthpMxh5i/zAgLuyH+0igf/4a5aBbBgjYIA/vfLPWOV3iEpwOzDl6AEXf0Dovq0YcbVGSkGXhbB4WbW0Q+goefbWEV5ReIMxDoonqqTfRIe1uEcH6JprTeD/VIuaex6WEghkSKoFD1gvPky8jx/Vg4P+s7dVodO4/q6RW9GYhNWLMrGQC2XTI36eEbIQIDAQAB",
   "permissions": [

@@ -8,6 +8,7 @@ The browser extension still works without this host. In that case it keeps using
 
 - Runs `yt-dlp.exe` locally from the extension popup.
 - Uses `ffmpeg.exe` for muxing, merging and remuxing streams.
+- Prioritizes compatible MP4 downloads: H.264/AVC video plus AAC/M4A audio when available.
 - Saves files by default to `%USERPROFILE%\Downloads\Video Catcher`.
 - Supports canceling the active Pro download.
 - Supports opt-in cookies per site using `--cookies-from-browser brave`.

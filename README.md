@@ -38,7 +38,7 @@ Then restart Brave/Chrome and press `Verificar Pro` in the popup. More details a
 
 - `Descargar`: starts a direct browser download.
 - `Descargar HLS`: downloads a simple unencrypted HLS playlist.
-- `Descargar Pro`: uses local `yt-dlp` + `ffmpeg` through the optional native host.
+- `Descargar Pro`: uses local `yt-dlp` + `ffmpeg` through the optional native host and prioritizes compatible MP4 output.
 - `Cookies`: opt-in per site for `yt-dlp --cookies-from-browser brave`.
 - `Grabar`: records the currently selected/main video element in the active tab.
 - `Preview`: attempts to preview direct video URLs.

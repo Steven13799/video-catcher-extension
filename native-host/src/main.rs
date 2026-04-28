@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
+const COMPATIBLE_FORMAT_SELECTOR: &str =
+    "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*[ext=mp4][vcodec!*=av01]+ba[ext=m4a]/b[ext=mp4]/best[ext=mp4]/best";
 
 type SharedWriter = Arc<Mutex<io::Stdout>>;
 type SharedState = Arc<Mutex<HostState>>;
@@ -406,7 +408,7 @@ fn run_yt_dlp(
         .arg("--ffmpeg-location")
         .arg(ffmpeg.parent().unwrap_or_else(|| Path::new(".")))
         .arg("-f")
-        .arg("bv*+ba/best")
+        .arg(COMPATIBLE_FORMAT_SELECTOR)
         .arg("--merge-output-format")
         .arg("mp4")
         .arg("-o")
