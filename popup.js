@@ -19,10 +19,6 @@ const elements = {
   debugEntries: document.getElementById('debug-entries'),
   debugCopy: document.getElementById('btn-debug-copy'),
   debugClear: document.getElementById('btn-debug-clear'),
-  previewPanel: document.getElementById('preview-panel'),
-  previewVideo: document.getElementById('preview-video'),
-  previewError: document.getElementById('preview-error'),
-  previewClose: document.getElementById('preview-close'),
   nativePanel: document.getElementById('native-panel'),
   nativeDot: document.getElementById('native-dot'),
   nativeStatusText: document.getElementById('native-status-text'),
@@ -45,7 +41,7 @@ const state = {
   videos: [],
   debugVisible: false,
   debugLogs: [],
-  activePreviewItem: null,
+  activePreview: null,
   statusTimer: null,
   recordingPoll: null,
   nativePoll: null,
@@ -151,6 +147,75 @@ function getFormatTag(video) {
   return { label: 'MP4', className: 'tag primary' };
 }
 
+function parseSizeScore(size) {
+  const match = String(size || '').match(/^([\d.]+)\s*(GB|MB|KB|B)$/i);
+  if (!match) return 0;
+
+  const value = Number.parseFloat(match[1]);
+  if (!Number.isFinite(value)) return 0;
+
+  const unit = match[2].toUpperCase();
+  if (unit === 'GB') return value * 1024 * 1024 * 1024;
+  if (unit === 'MB') return value * 1024 * 1024;
+  if (unit === 'KB') return value * 1024;
+  return value;
+}
+
+function getRelevanceInfo(video) {
+  const url = String(video.url || '').toLowerCase();
+  const contentType = String(video.contentType || '').toLowerCase();
+  let score = 0;
+  let label = 'Secundario';
+  let className = 'tag';
+
+  if (video.isMain) {
+    score += 1000;
+    label = 'Principal';
+    className = 'tag warn';
+  }
+
+  if (video.recordOnly || video.kind === 'recording') {
+    score += 760;
+    if (!video.isMain) {
+      label = 'Pagina';
+      className = 'tag warn';
+    }
+  } else if (video.kind === 'video') {
+    score += 620;
+    if (!video.isMain) {
+      label = 'Descargable';
+      className = 'tag primary';
+    }
+  } else if (video.kind === 'stream' || isHlsUrl(video.url, contentType) || url.includes('.mpd')) {
+    score += 420;
+    if (!video.isMain) {
+      label = 'Stream';
+      className = 'tag stream';
+    }
+  }
+
+  if (video.needsRecording) score += 90;
+  if (video.downloadMode === 'direct') score += 80;
+  if (video.downloadMode === 'hls') score += 30;
+  if (video.source === 'dom') score += 55;
+  if (video.source === 'network') score += 20;
+  if (url.includes('googlevideo.com') || url.includes('videoplayback')) score += 45;
+  if (url.includes('segment') || video.kind === 'segment') score -= 300;
+
+  score += Math.min(parseSizeScore(video.size) / (1024 * 1024), 240);
+  score += Math.min(Number(video.timestamp) || 0, Date.now()) / 1e13;
+
+  return { score, label, className };
+}
+
+function sortVideosByRelevance(videos) {
+  return [...videos].sort((a, b) => {
+    const relevanceDelta = getRelevanceInfo(b).score - getRelevanceInfo(a).score;
+    if (Math.abs(relevanceDelta) > 0.0001) return relevanceDelta;
+    return (Number(b.timestamp) || 0) - (Number(a.timestamp) || 0);
+  });
+}
+
 function clearNode(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
@@ -249,52 +314,80 @@ function createButton(label, className, onClick, iconName = null) {
 }
 
 function closePreview() {
-  elements.previewPanel.classList.remove('visible');
-  elements.previewError.classList.remove('visible');
-  elements.previewVideo.pause();
-  elements.previewVideo.removeAttribute('src');
-  elements.previewVideo.load();
+  if (!state.activePreview) return;
 
-  if (state.activePreviewItem) {
-    state.activePreviewItem.classList.remove('active');
-    state.activePreviewItem = null;
+  const { item, panel, video, error } = state.activePreview;
+  panel.classList.remove('visible');
+  error.classList.remove('visible');
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+
+  if (item) {
+    item.classList.remove('active');
   }
+
+  state.activePreview = null;
 }
 
-async function openPreview(video, itemElement) {
+function createInlinePreview() {
+  const panel = document.createElement('section');
+  panel.className = 'preview item-preview';
+
+  const head = document.createElement('div');
+  head.className = 'preview-head';
+
+  const title = document.createElement('span');
+  title.textContent = 'Vista previa';
+
+  const closeButton = createButton('Cerrar', 'ghost-btn', closePreview);
+
+  const videoElement = document.createElement('video');
+  videoElement.controls = true;
+  videoElement.preload = 'metadata';
+
+  const error = document.createElement('div');
+  error.className = 'preview-error';
+  error.textContent = 'No se pudo cargar la vista previa para este recurso.';
+
+  head.append(title, closeButton);
+  panel.append(head, videoElement, error);
+
+  return { panel, video: videoElement, error };
+}
+
+async function openPreview(video, itemElement, previewNodes) {
   if (video.recordOnly) {
     showStatus('Este recurso no expone una URL directa; usa grabacion.', 'info');
     return;
   }
 
-  if (state.activePreviewItem === itemElement && elements.previewPanel.classList.contains('visible')) {
+  if (state.activePreview?.item === itemElement && previewNodes.panel.classList.contains('visible')) {
     closePreview();
     return;
   }
 
-  if (state.activePreviewItem && state.activePreviewItem !== itemElement) {
-    state.activePreviewItem.classList.remove('active');
-  }
+  closePreview();
 
-  state.activePreviewItem = itemElement;
+  state.activePreview = { item: itemElement, ...previewNodes };
   itemElement.classList.add('active');
 
-  elements.previewPanel.classList.add('visible');
-  elements.previewError.classList.remove('visible');
-  elements.previewVideo.style.display = 'block';
-  elements.previewVideo.removeAttribute('src');
-  elements.previewVideo.load();
+  previewNodes.panel.classList.add('visible');
+  previewNodes.error.classList.remove('visible');
+  previewNodes.video.style.display = 'block';
+  previewNodes.video.removeAttribute('src');
+  previewNodes.video.load();
 
   const lowerUrl = String(video.url || '').toLowerCase();
   const needsFetchedPreview = lowerUrl.includes('tiktok') || needsRecording(video.url);
 
   function attachPreviewSource(source) {
-    elements.previewVideo.onerror = () => {
-      elements.previewVideo.style.display = 'none';
-      elements.previewError.classList.add('visible');
+    previewNodes.video.onerror = () => {
+      previewNodes.video.style.display = 'none';
+      previewNodes.error.classList.add('visible');
     };
-    elements.previewVideo.src = source;
-    elements.previewVideo.load();
+    previewNodes.video.src = source;
+    previewNodes.video.load();
   }
 
   if (!needsFetchedPreview || state.activeTabId === null) {
@@ -318,7 +411,7 @@ async function openPreview(video, itemElement) {
   const dataUrl = await storageGet(response.storageKey);
   await storageRemove(response.storageKey);
 
-  if (!dataUrl || state.activePreviewItem !== itemElement) {
+  if (!dataUrl || state.activePreview?.item !== itemElement) {
     attachPreviewSource(video.url);
     return;
   }
@@ -474,7 +567,7 @@ async function startNativeDownload(video, useCookies) {
 }
 
 function renderList(videos) {
-  state.videos = Array.isArray(videos) ? videos : [];
+  state.videos = sortVideosByRelevance(Array.isArray(videos) ? videos : []);
   elements.count.textContent = state.videos.length ? `(${state.videos.length})` : '';
   clearNode(elements.list);
   closePreview();
@@ -501,7 +594,8 @@ function renderList(videos) {
 
     const copy = document.createElement('div');
     copy.className = 'item-copy';
-    copy.addEventListener('click', () => openPreview(video, item));
+    const previewNodes = createInlinePreview();
+    copy.addEventListener('click', () => openPreview(video, item, previewNodes));
 
     const name = document.createElement('div');
     name.className = 'item-name';
@@ -520,10 +614,11 @@ function renderList(videos) {
     metaRow.className = 'meta-row';
 
     const formatTag = getFormatTag(video);
+    const relevanceTag = getRelevanceInfo(video);
+    metaRow.appendChild(createTag(relevanceTag.label, relevanceTag.className));
     metaRow.appendChild(createTag(formatTag.label, formatTag.className));
 
     if (video.size) metaRow.appendChild(createTag(video.size, 'tag'));
-    if (video.isMain) metaRow.appendChild(createTag('Principal', 'tag warn'));
     if (video.needsRecording) metaRow.appendChild(createTag('Grabacion', 'tag warn'));
 
     const actionsRow = document.createElement('div');
@@ -538,7 +633,7 @@ function renderList(videos) {
       }
     }, 'copy');
 
-    const previewButton = createButton('Preview', 'mini-btn', () => openPreview(video, item), 'preview');
+    const previewButton = createButton('Preview', 'mini-btn', () => openPreview(video, item, previewNodes), 'preview');
     previewButton.disabled = Boolean(video.recordOnly);
 
     let actionButton;
@@ -622,7 +717,7 @@ function renderList(videos) {
     proButton.disabled = Boolean(state.nativeStatus?.activeJob);
 
     actionsRow.append(copyButton, previewButton, actionButton, proButton, cookieToggle);
-    item.append(head, metaRow, actionsRow);
+    item.append(head, metaRow, actionsRow, previewNodes.panel);
     elements.list.appendChild(item);
   });
 
@@ -735,8 +830,6 @@ elements.clear.addEventListener('click', async () => {
   renderList([]);
   showStatus('Lista limpiada para esta pestana.', 'ok');
 });
-
-elements.previewClose.addEventListener('click', closePreview);
 
 elements.debugToggle.addEventListener('click', async () => {
   state.debugVisible = !state.debugVisible;

@@ -359,12 +359,15 @@
 
     .preview {
       display: none;
-      margin-bottom: 10px;
       border: 1px solid var(--line);
       border-radius: 16px;
       overflow: hidden;
       background: rgba(7, 11, 16, 0.96);
       box-shadow: var(--shadow);
+    }
+
+    .item-preview {
+      margin-top: 2px;
     }
 
     .preview.visible {
@@ -745,15 +748,6 @@
           <div class="progress-bar" id="recording-progress"></div>
         </div>
         <button type="button" class="stop-btn" id="btn-stop-recording">Detener grabacion</button>
-      </section>
-
-      <section class="preview" id="preview-panel">
-        <div class="preview-head">
-          <span>Vista previa</span>
-          <button type="button" class="ghost-btn" id="preview-close">Cerrar</button>
-        </div>
-        <video id="preview-video" controls preload="metadata"></video>
-        <div class="preview-error" id="preview-error">No se pudo cargar la vista previa para este recurso.</div>
       </section>
 
       <section class="loading" id="state-loading">Buscando videos en la pestana activa...</section>
