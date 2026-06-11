@@ -46,10 +46,20 @@ function storageRemove(key) {
   return new Promise((resolve) => previewStorage.remove(key, resolve));
 }
 
+function credentialsFor(url) {
+  // Solo enviamos cookies a recursos del mismo origen; a hosts de terceros
+  // (CDNs de video, etc.) se pide sin credenciales para no filtrar sesiones.
+  try {
+    return new URL(url, location.href).origin === location.origin ? 'include' : 'omit';
+  } catch {
+    return 'omit';
+  }
+}
+
 async function fetchPreviewChunk(url, referer) {
   const response = await fetch(url, {
     method: 'GET',
-    credentials: 'include',
+    credentials: credentialsFor(url),
     redirect: 'follow',
     referrer: referer || location.href,
     referrerPolicy: 'strict-origin-when-cross-origin',
@@ -75,7 +85,7 @@ async function fetchPreviewChunk(url, referer) {
 
 function fetchWithReferrer(url, options = {}) {
   return fetch(url, {
-    credentials: 'include',
+    credentials: credentialsFor(url),
     redirect: 'follow',
     referrer: options.referer || location.href,
     referrerPolicy: 'strict-origin-when-cross-origin',
@@ -683,12 +693,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === 'stopRecording') {
-    if (activeRecorder && activeRecorder.state !== 'inactive') {
-      activeRecorder.stop();
-    }
+    const hadActiveRecorder = Boolean(activeRecorder && activeRecorder.state !== 'inactive');
+    if (hadActiveRecorder) activeRecorder.stop();
 
     stopRecordingProgress();
-    sendResponse({ ok: true });
+    if (hadActiveRecorder) sendResponse({ ok: true });
+    else sendResponse({ ok: false, error: 'no hay grabacion activa' });
     return true;
   }
 });

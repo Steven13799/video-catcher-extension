@@ -357,6 +357,22 @@
       line-height: 1.5;
     }
 
+    .empty-tips {
+      margin: 12px auto 0;
+      padding: 0;
+      max-width: 320px;
+      list-style: none;
+      text-align: left;
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .empty-tips li::before {
+      content: '\2022';
+      margin-right: 6px;
+      color: var(--muted);
+    }
+
     .preview {
       display: none;
       border: 1px solid var(--line);
@@ -754,6 +770,11 @@
       <section class="empty" id="state-empty" hidden>
         <div class="empty-title">Sin videos detectados</div>
         <div class="empty-copy">Reproduce un video o deja que la pagina termine de cargar. Los recursos detectados apareceran aqui.</div>
+        <ul class="empty-tips">
+          <li>Dale play al video y vuelve a abrir el popup.</li>
+          <li>Recarga la pagina con el popup cerrado para captar las peticiones desde el inicio.</li>
+          <li>Algunos sitios solo funcionan con Descarga Pro o Grabacion.</li>
+        </ul>
       </section>
       <section class="list" id="video-list" hidden></section>
       <div class="footer" id="footer"></div>

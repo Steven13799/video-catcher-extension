@@ -860,8 +860,16 @@ elements.debugCopy.addEventListener('click', async () => {
 
 elements.stopRecording.addEventListener('click', async () => {
   if (state.activeTabId === null) return;
-  await sendRuntimeMessage({ action: 'stopRecording', tabId: state.activeTabId });
   showStatus('Deteniendo grabacion...', 'info');
+  const response = await sendRuntimeMessage({ action: 'stopRecording', tabId: state.activeTabId });
+
+  if (response?.ok) {
+    showStatus('Grabacion detenida; preparando descarga...', 'ok');
+  } else {
+    showStatus(`No se pudo detener la grabacion: ${response?.error || 'error'}`, 'error', 4200);
+  }
+
+  await loadRecordingState();
 });
 
 elements.nativeCheck.addEventListener('click', async () => {

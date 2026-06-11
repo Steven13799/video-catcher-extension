@@ -300,13 +300,21 @@ function disconnectNativePort(error = '') {
   rejectPendingNativeRequests(nativeState.lastError);
 }
 
+function asString(value, maxLen) {
+  return typeof value === 'string' ? sanitizeText(value, maxLen) : '';
+}
+
+function asToolInfo(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : { found: false };
+}
+
 function handleNativeMessage(message) {
   if (!message || typeof message !== 'object') return;
 
   if (message.type === 'ready') {
     nativeState.installed = true;
     nativeState.connected = true;
-    nativeState.hostVersion = sanitizeText(message.hostVersion || '', 32);
+    nativeState.hostVersion = asString(message.hostVersion, 32);
     nativeState.lastError = '';
     return;
   }
@@ -321,15 +329,17 @@ function handleNativeMessage(message) {
   if (message.type === 'tools') {
     nativeState.installed = true;
     nativeState.connected = true;
-    nativeState.hostVersion = sanitizeText(message.hostVersion || nativeState.hostVersion || '', 32);
+    nativeState.hostVersion = asString(message.hostVersion, 32) || nativeState.hostVersion || '';
     nativeState.tools = {
       ok: Boolean(message.ok),
-      ytDlp: message.ytDlp || { found: false },
-      ffmpeg: message.ffmpeg || { found: false },
+      ytDlp: asToolInfo(message.ytDlp),
+      ffmpeg: asToolInfo(message.ffmpeg),
       missing: Array.isArray(message.missing) ? message.missing.map((item) => sanitizeText(item, 40)) : []
     };
     nativeState.lastChecked = Date.now();
-    nativeState.lastError = nativeState.tools.ok ? '' : `Faltan herramientas: ${nativeState.tools.missing.join(', ')}`;
+    nativeState.lastError = nativeState.tools.ok
+      ? ''
+      : `Faltan herramientas: ${nativeState.tools.missing.join(', ')}. Ejecuta scripts/download-tools.ps1 y scripts/install-native-host.ps1 (ver docs/native-host.md).`;
     resolvePendingNativeRequest(message.id, {
       ok: Boolean(message.ok),
       tools: nativeState.tools,
@@ -343,10 +353,10 @@ function handleNativeMessage(message) {
     nativeState.connected = true;
     nativeState.lastError = '';
     nativeState.activeJob = {
-      id: sanitizeText(message.jobId || '', 80),
-      title: sanitizeText(message.title || 'video', 140),
-      target: sanitizeText(message.target || '', 260),
-      outputDir: sanitizeText(message.outputDir || '', 220),
+      id: asString(message.jobId, 80),
+      title: asString(message.title, 140) || 'video',
+      target: asString(message.target, 260),
+      outputDir: asString(message.outputDir, 220),
       startedAt: Date.now()
     };
     nativeState.lastProgress = {
@@ -362,8 +372,8 @@ function handleNativeMessage(message) {
 
   if (message.type === 'progress') {
     nativeState.lastProgress = {
-      jobId: sanitizeText(message.jobId || '', 80),
-      line: sanitizeText(message.line || '', 260),
+      jobId: asString(message.jobId, 80),
+      line: asString(message.line, 260),
       percent: Number.isFinite(message.percent) ? message.percent : null,
       t: Date.now()
     };
@@ -371,9 +381,9 @@ function handleNativeMessage(message) {
   }
 
   if (message.type === 'done') {
-    const outputDir = sanitizeText(message.outputDir || '', 220);
+    const outputDir = asString(message.outputDir, 220);
     nativeState.lastProgress = {
-      jobId: sanitizeText(message.jobId || '', 80),
+      jobId: asString(message.jobId, 80),
       line: outputDir ? `Completado en ${outputDir}` : 'Descarga Pro completada.',
       percent: 100,
       t: Date.now()
@@ -386,7 +396,7 @@ function handleNativeMessage(message) {
 
   if (message.type === 'cancelled') {
     nativeState.lastProgress = {
-      jobId: sanitizeText(message.jobId || '', 80),
+      jobId: asString(message.jobId, 80),
       line: 'Descarga Pro cancelada.',
       percent: null,
       t: Date.now()
@@ -399,11 +409,12 @@ function handleNativeMessage(message) {
   }
 
   if (message.type === 'error') {
-    const error = sanitizeText(message.error || 'Error del host nativo', 260);
+    const error = asString(message.error, 260) || 'Error del host nativo';
+    const jobId = asString(message.jobId, 80);
     nativeState.lastError = error;
-    if (message.jobId && nativeState.activeJob?.id === message.jobId) nativeState.activeJob = null;
+    if (jobId && nativeState.activeJob?.id === jobId) nativeState.activeJob = null;
     nativeState.lastProgress = {
-      jobId: sanitizeText(message.jobId || '', 80),
+      jobId,
       line: error,
       percent: null,
       t: Date.now()
@@ -496,7 +507,9 @@ function startNativeDownload(message, sendResponse) {
   if (explicitTabId !== null) {
     chrome.tabs.get(explicitTabId, (tab) => {
       if (chrome.runtime.lastError) {
-        getActiveTab(respond);
+        // El tab original ya no existe; buildNativePayload usa message.pageUrl/referer
+        // en su lugar para no heredar el contexto de otra pestaña.
+        respond(null);
         return;
       }
       respond(tab);
@@ -666,7 +679,26 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   clearTabState(tabId);
 });
 
+const CONTENT_SCRIPT_ACTIONS = new Set([
+  'vcLog',
+  'addVideosFromDom',
+  'recordingProgress',
+  'recordingDone',
+  'getVideos',
+  'getNativeStatus',
+  'getRecordingState',
+  'checkNativeHost',
+  'downloadVideo'
+]);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Los mensajes con sender.tab vienen de content scripts; las acciones sensibles
+  // (host nativo, grabacion, limpiar/cancelar) solo se aceptan desde el popup.
+  if (sender.tab && !CONTENT_SCRIPT_ACTIONS.has(message?.action)) {
+    sendResponse({ ok: false, error: 'origen no permitido' });
+    return;
+  }
+
   if (message.action === 'vcLog') {
     vcLog(message.level || 'info', message.source || 'content', message.msg || '');
     return;
@@ -688,7 +720,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'addVideosFromDom') {
     const tabId = sender.tab?.id;
-    if (!Number.isInteger(tabId) || !Array.isArray(message.videos)) return;
+    if (!Number.isInteger(tabId) || !Array.isArray(message.videos)) {
+      sendResponse({ ok: false, error: 'invalid payload' });
+      return true;
+    }
 
     message.videos.forEach((video) => {
       const url = normalizeUrl(video.url);
@@ -715,7 +750,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         isMain: Boolean(video.isMain)
       });
     });
-    return;
+    sendResponse({ ok: true });
+    return true;
   }
 
   if (message.action === 'clearVideos') {
@@ -879,7 +915,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
 
-    chrome.tabs.sendMessage(tabId, { action: 'stopRecording' }, () => {
+    chrome.tabs.sendMessage(tabId, { action: 'stopRecording' }, (response) => {
+      if (chrome.runtime.lastError || !response?.ok) {
+        sendResponse({
+          ok: false,
+          error: response?.error || chrome.runtime.lastError?.message || 'no se pudo detener la grabacion'
+        });
+        return;
+      }
       sendResponse({ ok: true });
     });
     return true;
