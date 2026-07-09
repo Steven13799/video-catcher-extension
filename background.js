@@ -6,6 +6,7 @@ const {
   VIDEO_MIME_TYPES,
   detectVideoKind,
   formatSize,
+  getCandidateRelevance,
   getFilename,
   getVideoKey,
   inferExtension,
@@ -24,6 +25,7 @@ const {
 const detectedVideos = Object.create(null);
 const recordingState = Object.create(null);
 const requestHeaderCache = Object.create(null);
+const CANDIDATE_SOURCES = new Set(['network', 'dom', 'injected', 'performance', 'recording-candidate']);
 
 let logsCache = null;
 
@@ -82,7 +84,11 @@ function setBadge(tabId) {
 }
 
 function persistVideos(tabId) {
-  const videos = Object.values(detectedVideos[tabId] || {}).sort((a, b) => b.timestamp - a.timestamp);
+  const videos = Object.values(detectedVideos[tabId] || {}).sort((a, b) => {
+    const relevanceDelta = getCandidateRelevance(b).score - getCandidateRelevance(a).score;
+    if (Math.abs(relevanceDelta) > 0.0001) return relevanceDelta;
+    return b.timestamp - a.timestamp;
+  });
   chrome.storage.local.set({ [`tab_${tabId}`]: videos });
   setBadge(tabId);
 }
@@ -144,9 +150,33 @@ function trimVideos(tabId) {
   if (entries.length <= MAX_VIDEOS_PER_TAB) return;
 
   entries
-    .sort((a, b) => a[1].timestamp - b[1].timestamp)
+    .sort((a, b) => {
+      const relevanceDelta = getCandidateRelevance(a[1]).score - getCandidateRelevance(b[1]).score;
+      if (Math.abs(relevanceDelta) > 0.0001) return relevanceDelta;
+      return a[1].timestamp - b[1].timestamp;
+    })
     .slice(0, entries.length - MAX_VIDEOS_PER_TAB)
     .forEach(([key]) => delete detectedVideos[tabId][key]);
+}
+
+function normalizeCandidateSource(source) {
+  const normalized = String(source || '').toLowerCase();
+  return CANDIDATE_SOURCES.has(normalized) ? normalized : 'network';
+}
+
+function mergeCandidateSources(currentSources, source) {
+  const output = Array.isArray(currentSources)
+    ? currentSources.map(normalizeCandidateSource)
+    : [];
+  const normalized = normalizeCandidateSource(source);
+  if (!output.includes(normalized)) output.push(normalized);
+  return output;
+}
+
+function clampMediaMetric(value, maxValue) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  return Math.min(Math.round(numeric), maxValue);
 }
 
 function addRecordingCandidate(tabId, pageUrl, reason = 'Video detectado en la pagina') {
@@ -180,6 +210,8 @@ function upsertVideo(tabId, url, kind, contentType, referer = '', options = {}) 
   const finalKind = kind || 'video';
   const finalFilename = options.filename || getFilename(normalizedUrl, contentType, finalKind);
   const finalHeaders = sanitizeDownloadHeaders(options.requestHeaders || current?.requestHeaders || [], referer);
+  const source = normalizeCandidateSource(options.source || 'network');
+  const contentLength = clampMediaMetric(options.contentLength, Number.MAX_SAFE_INTEGER);
   const entry = current || {
     url: normalizedUrl,
     filename: finalFilename,
@@ -191,9 +223,19 @@ function upsertVideo(tabId, url, kind, contentType, referer = '', options = {}) 
     requestHeaders: finalHeaders,
     needsRecording: Boolean(options.recordOnly || needsRecording(normalizedUrl, finalKind)),
     recordOnly: Boolean(options.recordOnly),
-    source: options.source || 'network',
+    source,
+    sources: [source],
     reason: sanitizeText(options.reason || '', 160),
     isMain: false,
+    isPlaying: false,
+    visible: false,
+    videoWidth: 0,
+    videoHeight: 0,
+    duration: 0,
+    contentLength: 0,
+    acceptRanges: false,
+    frameId: Number.isInteger(options.frameId) ? options.frameId : -1,
+    requestType: sanitizeText(options.requestType || '', 32),
     downloadMode: isHlsUrl(normalizedUrl, contentType) ? 'hls' : 'direct'
   };
 
@@ -203,12 +245,33 @@ function upsertVideo(tabId, url, kind, contentType, referer = '', options = {}) 
   entry.referer = isHttpUrl(referer) ? referer : entry.referer || '';
   entry.requestHeaders = finalHeaders.length ? finalHeaders : entry.requestHeaders || [];
   entry.isMain = Boolean(options.isMain || entry.isMain);
+  entry.isPlaying = Boolean(options.isPlaying || entry.isPlaying);
+  entry.visible = Boolean(options.visible || entry.visible);
   entry.recordOnly = Boolean(options.recordOnly || entry.recordOnly);
   entry.needsRecording = Boolean(entry.recordOnly || needsRecording(normalizedUrl, entry.kind));
-  entry.source = options.source || entry.source || 'network';
+  entry.sources = mergeCandidateSources(entry.sources || [entry.source], source);
+  entry.source = entry.sources.includes('dom')
+    ? 'dom'
+    : entry.sources.includes('injected')
+      ? 'injected'
+      : entry.sources[0] || 'network';
   entry.reason = sanitizeText(options.reason || entry.reason || '', 160);
   entry.downloadMode = isHlsUrl(normalizedUrl, entry.contentType) ? 'hls' : entry.downloadMode || 'direct';
-  if (options.size && !entry.size) entry.size = options.size;
+  entry.videoWidth = Math.max(entry.videoWidth || 0, clampMediaMetric(options.videoWidth, 16384));
+  entry.videoHeight = Math.max(entry.videoHeight || 0, clampMediaMetric(options.videoHeight, 16384));
+  entry.duration = Math.max(entry.duration || 0, clampMediaMetric(options.duration, 24 * 60 * 60));
+  entry.acceptRanges = Boolean(options.acceptRanges || entry.acceptRanges);
+  entry.requestType = sanitizeText(options.requestType || entry.requestType || '', 32);
+  if (Number.isInteger(options.frameId) && (entry.frameId !== 0 || options.frameId === 0)) {
+    entry.frameId = options.frameId;
+  }
+  if (contentLength >= (entry.contentLength || 0)) {
+    entry.contentLength = contentLength;
+    entry.size = formatSize(contentLength) || entry.size || null;
+  } else if (options.size && !entry.size) {
+    entry.size = options.size;
+  }
+  entry.relevance = getCandidateRelevance(entry).score;
   if (!current) entry.timestamp = Date.now();
 
   detectedVideos[tabId][key] = entry;
@@ -228,6 +291,8 @@ function upsertVideo(tabId, url, kind, contentType, referer = '', options = {}) 
       if (!fresh || fresh.size) return;
 
       fresh.size = formatted;
+      fresh.contentLength = bytes;
+      fresh.relevance = getCandidateRelevance(fresh).score;
       persistVideos(tabId);
       vcLog('info', 'bg', `Tamano detectado: ${fresh.filename} ${formatted}`);
     });
@@ -236,12 +301,15 @@ function upsertVideo(tabId, url, kind, contentType, referer = '', options = {}) 
 
 function updateSizeFromHeaders(tabId, url, contentLength) {
   const key = getVideoKey(url);
-  const formatted = formatSize(Number.parseInt(contentLength, 10));
+  const bytes = Number.parseInt(contentLength, 10);
+  const formatted = formatSize(bytes);
   if (!key || !formatted || !detectedVideos[tabId]?.[key]) return;
 
   const entry = detectedVideos[tabId][key];
-  if (!entry.size) {
+  if (!entry.size || bytes >= (entry.contentLength || 0)) {
     entry.size = formatted;
+    entry.contentLength = bytes;
+    entry.relevance = getCandidateRelevance(entry).score;
     persistVideos(tabId);
   }
 }
@@ -605,7 +673,11 @@ chrome.webRequest.onBeforeRequest.addListener(
     const referer = getRefererFromDetails(details);
 
     if (details.type === 'main_frame' && isTikTokVideo(details.url)) {
-      upsertVideo(details.tabId, details.url, 'video', '', referer);
+      upsertVideo(details.tabId, details.url, 'video', '', referer, {
+        source: 'network',
+        requestType: details.type,
+        frameId: details.frameId
+      });
       return;
     }
 
@@ -621,7 +693,10 @@ chrome.webRequest.onBeforeRequest.addListener(
 
     const cached = getCachedRequest(details.tabId, details.url);
     upsertVideo(details.tabId, details.url, kind, '', referer, {
-      requestHeaders: cached?.headers || []
+      requestHeaders: cached?.headers || [],
+      source: 'network',
+      requestType: details.type,
+      frameId: details.frameId
     });
   },
   { urls: ['http://*/*', 'https://*/*'] }
@@ -635,7 +710,11 @@ chrome.webRequest.onHeadersReceived.addListener(
       const location = details.responseHeaders?.find((header) => header.name.toLowerCase() === 'location')?.value;
       if (location) {
         const targetUrl = new URL(location, details.url).toString();
-        upsertVideo(details.tabId, targetUrl, 'video', '', getRefererFromDetails(details));
+        upsertVideo(details.tabId, targetUrl, 'video', '', getRefererFromDetails(details), {
+          source: 'network',
+          requestType: details.type,
+          frameId: details.frameId
+        });
       }
       return;
     }
@@ -644,6 +723,7 @@ chrome.webRequest.onHeadersReceived.addListener(
       details.responseHeaders?.find((header) => header.name.toLowerCase() === 'content-type')?.value || ''
     ).toLowerCase();
     const contentLength = details.responseHeaders?.find((header) => header.name.toLowerCase() === 'content-length')?.value;
+    const acceptRanges = details.responseHeaders?.find((header) => header.name.toLowerCase() === 'accept-ranges')?.value;
 
     const kind = detectVideoKind(details.url, contentType);
     if (!kind) return;
@@ -658,6 +738,11 @@ chrome.webRequest.onHeadersReceived.addListener(
     const cached = getCachedRequest(details.tabId, details.url);
     upsertVideo(details.tabId, details.url, kind, contentType, getRefererFromDetails(details), {
       requestHeaders: cached?.headers || [],
+      source: 'network',
+      requestType: details.type,
+      frameId: details.frameId,
+      contentLength: Number.parseInt(contentLength || '', 10),
+      acceptRanges: /bytes/i.test(String(acceptRanges || '')),
       size: formatSize(Number.parseInt(contentLength || '', 10))
     });
 
@@ -734,8 +819,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         upsertVideo(tabId, url, 'recording', '', url, {
           recordOnly: true,
           isMain: Boolean(video.isMain),
+          isPlaying: Boolean(video.isPlaying),
+          visible: Boolean(video.visible),
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          duration: video.duration,
           filename: video.filename,
           source: video.source || 'dom',
+          frameId: sender.frameId,
           reason: video.reason || 'Video reproducible detectado'
         });
         return;
@@ -748,7 +839,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       upsertVideo(tabId, url, kind, video.contentType || '', '', {
-        isMain: Boolean(video.isMain)
+        isMain: Boolean(video.isMain),
+        isPlaying: Boolean(video.isPlaying),
+        visible: Boolean(video.visible),
+        videoWidth: video.videoWidth,
+        videoHeight: video.videoHeight,
+        duration: video.duration,
+        source: video.source || 'dom',
+        frameId: sender.frameId
       });
     });
     sendResponse({ ok: true });

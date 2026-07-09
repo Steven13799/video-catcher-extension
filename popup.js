@@ -1,4 +1,5 @@
 const {
+  getCandidateRelevance,
   isHlsUrl,
   needsRecording,
   sanitizeText
@@ -147,65 +148,8 @@ function getFormatTag(video) {
   return { label: 'MP4', className: 'tag primary' };
 }
 
-function parseSizeScore(size) {
-  const match = String(size || '').match(/^([\d.]+)\s*(GB|MB|KB|B)$/i);
-  if (!match) return 0;
-
-  const value = Number.parseFloat(match[1]);
-  if (!Number.isFinite(value)) return 0;
-
-  const unit = match[2].toUpperCase();
-  if (unit === 'GB') return value * 1024 * 1024 * 1024;
-  if (unit === 'MB') return value * 1024 * 1024;
-  if (unit === 'KB') return value * 1024;
-  return value;
-}
-
 function getRelevanceInfo(video) {
-  const url = String(video.url || '').toLowerCase();
-  const contentType = String(video.contentType || '').toLowerCase();
-  let score = 0;
-  let label = 'Secundario';
-  let className = 'tag';
-
-  if (video.isMain) {
-    score += 1000;
-    label = 'Principal';
-    className = 'tag warn';
-  }
-
-  if (video.recordOnly || video.kind === 'recording') {
-    score += 760;
-    if (!video.isMain) {
-      label = 'Pagina';
-      className = 'tag warn';
-    }
-  } else if (video.kind === 'video') {
-    score += 620;
-    if (!video.isMain) {
-      label = 'Descargable';
-      className = 'tag primary';
-    }
-  } else if (video.kind === 'stream' || isHlsUrl(video.url, contentType) || url.includes('.mpd')) {
-    score += 420;
-    if (!video.isMain) {
-      label = 'Stream';
-      className = 'tag stream';
-    }
-  }
-
-  if (video.needsRecording) score += 90;
-  if (video.downloadMode === 'direct') score += 80;
-  if (video.downloadMode === 'hls') score += 30;
-  if (video.source === 'dom') score += 55;
-  if (video.source === 'network') score += 20;
-  if (url.includes('googlevideo.com') || url.includes('videoplayback')) score += 45;
-  if (url.includes('segment') || video.kind === 'segment') score -= 300;
-
-  score += Math.min(parseSizeScore(video.size) / (1024 * 1024), 240);
-  score += Math.min(Number(video.timestamp) || 0, Date.now()) / 1e13;
-
-  return { score, label, className };
+  return getCandidateRelevance(video);
 }
 
 function sortVideosByRelevance(videos) {

@@ -32,6 +32,47 @@ async function run() {
   const youtubeUrl = 'https://r1---sn.googlevideo.com/videoplayback?id=abc123&itag=18&range=1-2';
   assert.equal(utils.getVideoKey(youtubeUrl), 'yt_abc123_18');
 
+  const rangeStart = 'https://cdn.example.com/video.mp4?token=abc&range=0-1048575';
+  const rangeNext = 'https://cdn.example.com/video.mp4?range=1048576-2097151&token=abc';
+  assert.equal(utils.getVideoKey(rangeStart), utils.getVideoKey(rangeNext));
+
+  const mainVideo = {
+    url: 'https://cdn.example.com/media/program.mp4',
+    kind: 'video',
+    contentType: 'video/mp4',
+    contentLength: 24 * 1024 * 1024,
+    isMain: true,
+    isPlaying: true,
+    visible: true,
+    videoWidth: 1280,
+    videoHeight: 720,
+    duration: 90,
+    sources: ['network', 'dom'],
+    downloadMode: 'direct',
+    acceptRanges: true,
+    frameId: 0
+  };
+  const adVideo = {
+    url: 'https://ads.example.com/preroll/advertisement.mp4',
+    kind: 'video',
+    contentType: 'video/mp4',
+    contentLength: 3 * 1024 * 1024,
+    source: 'network',
+    downloadMode: 'direct'
+  };
+  const recordingFallback = {
+    url: 'https://example.com/watch/123',
+    kind: 'recording',
+    recordOnly: true,
+    isMain: false,
+    source: 'dom'
+  };
+
+  assert.equal(utils.isLikelyAdvertisementUrl(adVideo.url), true);
+  assert.equal(utils.getCandidateRelevance(adVideo).label, 'Anuncio');
+  assert.ok(utils.getCandidateRelevance(mainVideo).score > utils.getCandidateRelevance(adVideo).score);
+  assert.ok(utils.getCandidateRelevance(mainVideo).score > utils.getCandidateRelevance(recordingFallback).score);
+
   assert.equal(utils.sanitizeText('a\u0000b\tc', 10), 'a b c');
   assert.equal(utils.sanitizeText('abcdefghijk', 8), 'abcde...');
 

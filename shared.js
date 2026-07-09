@@ -13,6 +13,12 @@
 
   const STREAM_PATTERNS = ['.m3u8', '.m3u', '.mpd'];
   const SEGMENT_EXTENSIONS = ['.ts', '.m4s', '.cmfv', '.cmfa'];
+  const VOLATILE_MEDIA_QUERY_PARAMS = new Set([
+    'range',
+    'rn',
+    'rbuf',
+    'redirect_counter'
+  ]);
 
   const VIDEO_MIME_TYPES = [
     'video/',
@@ -318,6 +324,119 @@
     return `${bytes} B`;
   }
 
+  function parseSizeBytes(value) {
+    if (Number.isFinite(value) && value > 0) return value;
+
+    const match = String(value || '').match(/^([\d.]+)\s*(GB|MB|KB|B)$/i);
+    if (!match) return 0;
+
+    const amount = Number.parseFloat(match[1]);
+    if (!Number.isFinite(amount) || amount <= 0) return 0;
+
+    const unit = match[2].toUpperCase();
+    if (unit === 'GB') return amount * 1024 * 1024 * 1024;
+    if (unit === 'MB') return amount * 1024 * 1024;
+    if (unit === 'KB') return amount * 1024;
+    return amount;
+  }
+
+  function isLikelyAdvertisementUrl(url) {
+    if (!isHttpUrl(url)) return false;
+
+    try {
+      const { path, query } = lowerUrlParts(url);
+      return /(?:^|[\/_.?=&-])(adserver|ads?|advert(?:ising)?|promo(?:tion)?|preroll|midroll|postroll|sponsor(?:ed)?|tracking|analytics|beacon|pixel)(?:$|[\/_.?=&-])/.test(`${path}?${query}`);
+    } catch {
+      return false;
+    }
+  }
+
+  function getCandidateRelevance(candidate = {}) {
+    const url = String(candidate.url || '');
+    const lowerUrl = url.toLowerCase();
+    const contentType = String(candidate.contentType || '').toLowerCase();
+    const kind = String(candidate.kind || 'video').toLowerCase();
+    const sources = Array.isArray(candidate.sources)
+      ? candidate.sources.map((source) => String(source || '').toLowerCase())
+      : [String(candidate.source || '').toLowerCase()];
+    const recordOnly = Boolean(candidate.recordOnly || kind === 'recording');
+    const stream = kind === 'stream' || isHlsUrl(url, contentType) || isDashUrl(url, contentType);
+    const segment = kind === 'segment' || isSegmentUrl(url, contentType);
+    const advertisement = Boolean(candidate.isAdvertisement) || isLikelyAdvertisementUrl(url);
+    const sizeBytes = parseSizeBytes(candidate.contentLength) || parseSizeBytes(candidate.size);
+    const width = Math.max(0, Number(candidate.videoWidth) || 0);
+    const height = Math.max(0, Number(candidate.videoHeight) || 0);
+    const duration = Math.max(0, Number(candidate.duration) || 0);
+    let score = 0;
+    let label = 'Secundario';
+    let className = 'tag';
+
+    if (recordOnly) {
+      score += 150;
+      label = 'Grabacion';
+      className = 'tag warn';
+    } else if (kind === 'video') {
+      score += 620;
+      label = 'Descargable';
+      className = 'tag primary';
+    } else if (stream) {
+      score += 430;
+      label = 'Stream';
+      className = 'tag stream';
+    }
+
+    if (candidate.isMain) {
+      score += 720;
+      label = 'Principal';
+      className = 'tag warn';
+    }
+
+    if (candidate.isPlaying) {
+      score += 380;
+      label = 'Principal';
+      className = 'tag warn';
+    }
+
+    if (candidate.visible) score += 100;
+    if (candidate.frameId === 0) score += 35;
+    if (sources.includes('dom') || sources.includes('injected')) score += 90;
+    if (sources.includes('network')) score += 25;
+    if (contentType.startsWith('video/') || contentType.includes('application/mp4')) score += 130;
+    if (candidate.downloadMode === 'direct') score += 75;
+    if (candidate.downloadMode === 'hls') score += 25;
+    if (candidate.acceptRanges) score += 20;
+    if (lowerUrl.includes('googlevideo.com') || lowerUrl.includes('videoplayback')) score += 40;
+
+    const pixels = width * height;
+    if (pixels >= 1280 * 720) score += 160;
+    else if (pixels >= 640 * 360) score += 105;
+    else if (pixels >= 320 * 180) score += 55;
+    else if (pixels > 0) score += 15;
+
+    if (duration >= 90) score += 55;
+    else if (duration >= 30) score += 30;
+
+    if (sizeBytes > 0) {
+      if (sizeBytes < 96 * 1024) score -= 340;
+      else if (sizeBytes < 512 * 1024) score -= 120;
+      else score += Math.min(Math.log2(sizeBytes / (1024 * 1024) + 1) * 45, 180);
+    }
+
+    if (contentType.startsWith('image/') || contentType.startsWith('audio/')) score -= 600;
+    if (segment || lowerUrl.includes('segment')) score -= 1000;
+
+    if (advertisement) {
+      score -= 900;
+      label = 'Anuncio';
+      className = 'tag';
+    } else if (segment) {
+      label = 'Segmento';
+      className = 'tag';
+    }
+
+    return { score, label, className };
+  }
+
   function getVideoKey(url) {
     const normalized = normalizeUrl(url);
     if (!normalized) return null;
@@ -329,7 +448,10 @@
         const itag = parsed.searchParams.get('itag') || '';
         if (id || itag) return `yt_${id}_${itag}`;
       }
-      return normalized;
+
+      VOLATILE_MEDIA_QUERY_PARAMS.forEach((name) => parsed.searchParams.delete(name));
+      parsed.searchParams.sort();
+      return parsed.toString();
     } catch {
       return normalized;
     }
@@ -344,10 +466,12 @@
     MAX_VIDEOS_PER_TAB,
     detectVideoKind,
     formatSize,
+    getCandidateRelevance,
     getFilename,
     getVideoKey,
     hostMatches,
     inferExtension,
+    isLikelyAdvertisementUrl,
     isDashUrl,
     isHlsUrl,
     isHttpUrl,
@@ -356,6 +480,7 @@
     isTikTokVideo,
     needsRecording,
     normalizeUrl,
+    parseSizeBytes,
     safeFilename,
     sanitizeText
   };

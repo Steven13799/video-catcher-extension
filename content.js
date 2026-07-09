@@ -18,9 +18,9 @@ let recordedChunks = [];
 let recordingStart = null;
 let progressTimer = null;
 
-const reportedDomUrls = new Set();
-const reportedRecordOnlyUrls = new Set();
+const reportedDomCandidates = new Map();
 const scannedScripts = new WeakSet();
+const observedMediaElements = new WeakSet();
 let pendingScanNodes = new Set();
 let scanTimer = null;
 let observerStarted = false;
@@ -313,56 +313,119 @@ function sendDomVideos(videos) {
   } catch {}
 }
 
-function pushRecordingCandidate(results, reason = 'Video reproducible detectado', isMain = true) {
-  const pageUrl = normalizeUrl(location.href);
-  if (!pageUrl || reportedRecordOnlyUrls.has(pageUrl)) return;
+function getVideoMetadata(video) {
+  const width = Math.max(0, Number(video.videoWidth) || 0);
+  const height = Math.max(0, Number(video.videoHeight) || 0);
+  const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+  let visible = false;
 
-  reportedRecordOnlyUrls.add(pageUrl);
-  results.push({
+  try {
+    const rect = video.getBoundingClientRect();
+    visible = rect.width >= 160 && rect.height >= 90 && rect.bottom > 0 && rect.right > 0 &&
+      rect.top < window.innerHeight && rect.left < window.innerWidth;
+  } catch {}
+
+  return {
+    isPlaying: !video.paused && !video.ended && video.readyState > 1,
+    visible,
+    videoWidth: width,
+    videoHeight: height,
+    duration
+  };
+}
+
+function observeVideo(video) {
+  if (observedMediaElements.has(video)) return;
+  observedMediaElements.add(video);
+
+  ['play', 'playing', 'loadedmetadata', 'durationchange', 'resize', 'emptied'].forEach((eventName) => {
+    video.addEventListener(eventName, () => scheduleScan(video), { passive: true });
+  });
+}
+
+function candidateSignature(candidate) {
+  return [
+    candidate.kind,
+    candidate.recordOnly ? 'record' : '',
+    candidate.isMain ? 'main' : '',
+    candidate.isPlaying ? 'playing' : '',
+    candidate.visible ? 'visible' : '',
+    candidate.videoWidth || 0,
+    candidate.videoHeight || 0,
+    Math.round(Number(candidate.duration) || 0),
+    candidate.source || ''
+  ].join('|');
+}
+
+function shouldReportCandidate(key, candidate) {
+  const signature = candidateSignature(candidate);
+  if (reportedDomCandidates.get(key) === signature) return false;
+
+  if (reportedDomCandidates.size > 2000) reportedDomCandidates.clear();
+  reportedDomCandidates.set(key, signature);
+  return true;
+}
+
+function pushRecordingCandidate(results, reason = 'Video reproducible detectado', isMain = true, metadata = {}) {
+  const pageUrl = normalizeUrl(location.href);
+  if (!pageUrl) return;
+
+  const candidate = {
     url: pageUrl,
     kind: 'recording',
     recordOnly: true,
     isMain,
     filename: sanitizeText(document.title || 'video_recording', 120),
     source: 'dom',
-    reason
-  });
+    reason,
+    ...metadata
+  };
+  if (!shouldReportCandidate(`record:${pageUrl}`, candidate)) return;
+  results.push(candidate);
 }
 
-function pushResult(results, url, kind, isMain = false) {
+function pushResult(results, url, kind, isMain = false, metadata = {}) {
   const normalized = normalizeUrl(url);
   const detectedKind = detectVideoKind(normalized) || kind;
-  if (!normalized || !detectedKind || reportedDomUrls.has(normalized)) return;
+  if (!normalized || !detectedKind) return;
 
   if (detectedKind === 'segment') {
-    pushRecordingCandidate(results, 'Segmentos de video detectados', isMain);
+    pushRecordingCandidate(results, 'Segmentos de video detectados', isMain, metadata);
     return;
   }
 
-  if (reportedDomUrls.size > 2000) reportedDomUrls.clear();
-  reportedDomUrls.add(normalized);
-  results.push({ url: normalized, kind: detectedKind, isMain: Boolean(isMain) });
+  const candidate = {
+    url: normalized,
+    kind: detectedKind,
+    isMain: Boolean(isMain),
+    source: metadata.source || 'dom',
+    ...metadata
+  };
+  if (!shouldReportCandidate(normalized, candidate)) return;
+  results.push(candidate);
 }
 
 function collectFromVideo(video, results) {
+  observeVideo(video);
   const sources = [video.currentSrc, video.src];
   video.querySelectorAll('source[src]').forEach((source) => sources.push(source.src));
 
   const isMain = !video.paused || (video.currentTime || 0) > 0;
+  const metadata = { source: 'dom', ...getVideoMetadata(video) };
   let foundHttpSource = false;
 
   sources.filter(Boolean).forEach((source) => {
     if (!isHttpUrl(source)) {
-      if (/^(blob|mediastream):/i.test(source)) pushRecordingCandidate(results, 'Video blob/MSE detectado', isMain);
+      if (/^(blob|mediastream):/i.test(source)) pushRecordingCandidate(results, 'Video blob/MSE detectado', isMain, metadata);
       return;
     }
 
     foundHttpSource = true;
-    pushResult(results, source, 'video', isMain);
+    pushResult(results, source, 'video', isMain, metadata);
   });
 
   if (!foundHttpSource && (video.srcObject || video.readyState > 0 || video.videoWidth || video.clientWidth > 240)) {
-    pushRecordingCandidate(results, 'Video sin URL directa detectado', isMain);
+    pushRecordingCandidate(results, 'Video sin URL directa detectado', isMain, metadata);
   }
 }
 
@@ -370,7 +433,7 @@ function collectFromAnchor(anchor, results) {
   const href = anchor.href;
   const kind = detectVideoKind(href);
   if (!href || !kind) return;
-  pushResult(results, href, kind, false);
+  pushResult(results, href, kind, false, { source: 'dom' });
 }
 
 function collectFromAttributes(element, results) {
@@ -378,7 +441,7 @@ function collectFromAttributes(element, results) {
 
   Array.from(element.attributes).forEach((attr) => {
     if (!/src|href|url|video|media|content/i.test(attr.name)) return;
-    extractMediaUrlsFromText(attr.value).forEach((url) => pushResult(results, url, detectVideoKind(url) || 'video', false));
+    extractMediaUrlsFromText(attr.value).forEach((url) => pushResult(results, url, detectVideoKind(url) || 'video', false, { source: 'dom' }));
   });
 }
 
@@ -412,7 +475,7 @@ function collectFromScript(script, results) {
   scannedScripts.add(script);
 
   const text = script.textContent || '';
-  extractMediaUrlsFromText(text).forEach((url) => pushResult(results, url, detectVideoKind(url) || 'video', false));
+  extractMediaUrlsFromText(text).forEach((url) => pushResult(results, url, detectVideoKind(url) || 'video', false, { source: 'dom' }));
 }
 
 function scanNode(node, results) {
@@ -443,7 +506,7 @@ function scanPerformanceEntries(results) {
     const url = entry.name;
     const kind = detectVideoKind(url) || (isLikelyMediaUrl(url) ? 'video' : null);
     if (!kind) return;
-    pushResult(results, url, kind, false);
+    pushResult(results, url, kind, false, { source: 'performance' });
   });
 }
 
@@ -514,7 +577,7 @@ function startDetection() {
         const results = [];
         list.getEntries().forEach((entry) => {
           const kind = detectVideoKind(entry.name) || (isLikelyMediaUrl(entry.name) ? 'video' : null);
-          if (kind) pushResult(results, entry.name, kind, false);
+          if (kind) pushResult(results, entry.name, kind, false, { source: 'performance' });
         });
         sendDomVideos(results);
       });
@@ -721,7 +784,12 @@ window.addEventListener('__vc_video_found', (event) => {
   const url = normalizeUrl(detail.url);
   const kind = detectVideoKind(url) || event.detail?.kind || 'video';
   if (!url || !kind) return;
-  sendDomVideos([{ url, kind, isMain: Boolean(detail.isMain) }]);
+  sendDomVideos([{
+    url,
+    kind,
+    isMain: Boolean(detail.isMain),
+    source: 'injected'
+  }]);
 });
 
 window.addEventListener('load', startDetection, { once: true });
