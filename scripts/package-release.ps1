@@ -67,6 +67,7 @@ New-Item -ItemType Directory -Path (Join-Path $packageRoot "native-host") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "native-host\target\release\video-catcher-host.exe") -Destination (Join-Path $packageRoot "native-host\video-catcher-host.exe") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "native-host\tools\yt-dlp.exe") -Destination (Join-Path $packageRoot "native-host\yt-dlp.exe") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "native-host\tools\ffmpeg.exe") -Destination (Join-Path $packageRoot "native-host\ffmpeg.exe") -Force
+Copy-Item -LiteralPath (Join-Path $repoRoot "native-host\tools\ffprobe.exe") -Destination (Join-Path $packageRoot "native-host\ffprobe.exe") -Force
 
 if (Test-Path $zipPath) {
   Remove-Item -LiteralPath $zipPath -Force

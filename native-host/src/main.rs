@@ -11,7 +11,7 @@ use std::thread;
 
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 const COMPATIBLE_FORMAT_SELECTOR: &str =
-    "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*[ext=mp4][vcodec!*=av01]+ba[ext=m4a]/b[ext=mp4]/best[ext=mp4]/best";
+    "b[ext=mp4][vcodec*=avc1][acodec!=none]/b[ext=mp4][vcodec*=h264][acodec!=none]/b[ext=mp4][acodec!=none][vcodec!=none]/bv*[vcodec*=avc1]+ba[acodec^=mp4a]/bv*[vcodec*=h264]+ba[acodec^=mp4a]/bv*[ext=mp4][vcodec!*=av01]+ba[ext=m4a]/b[ext=mp4]/best[ext=mp4]/best";
 
 type SharedWriter = Arc<Mutex<io::Stdout>>;
 type SharedState = Arc<Mutex<HostState>>;
@@ -31,7 +31,10 @@ enum Request {
     #[serde(rename = "checkTools")]
     CheckTools { id: Option<String> },
     #[serde(rename = "download")]
-    Download { id: String, payload: DownloadPayload },
+    Download {
+        id: String,
+        payload: DownloadPayload,
+    },
     #[serde(rename = "cancel")]
     Cancel {
         id: Option<String>,
@@ -56,6 +59,7 @@ struct DownloadPayload {
 struct ToolStatus {
     yt_dlp: Option<PathBuf>,
     ffmpeg: Option<PathBuf>,
+    ffprobe: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -233,7 +237,11 @@ fn handle_download(
 
     thread::spawn(move || {
         if let Err(error) = fs::create_dir_all(&output_dir) {
-            send_job_error(&writer, &job_id, format!("cannot create output directory: {error}"));
+            send_job_error(
+                &writer,
+                &job_id,
+                format!("cannot create output directory: {error}"),
+            );
             clear_active_job(&state, &job_id);
             return;
         }
@@ -354,6 +362,10 @@ fn send_tool_status(writer: &SharedWriter, request_id: Option<&str>, tools: &Too
                 "found": tools.ffmpeg.is_some(),
                 "path": tools.ffmpeg.as_ref().map(|path| path.to_string_lossy().to_string())
             },
+            "ffprobe": {
+                "found": tools.ffprobe.is_some(),
+                "path": tools.ffprobe.as_ref().map(|path| path.to_string_lossy().to_string())
+            },
             "missing": missing
         }),
     );
@@ -398,7 +410,12 @@ fn run_yt_dlp(
         return RunResult::Failed("ffmpeg.exe was not found".to_string());
     };
 
-    send_progress(&writer, job_id, &format!("yt-dlp target: {}", target.url), None);
+    send_progress(
+        &writer,
+        job_id,
+        &format!("yt-dlp target: {}", target.url),
+        None,
+    );
 
     let mut command = Command::new(yt_dlp);
     command
@@ -487,7 +504,13 @@ fn run_yt_dlp(
     let summary = tail
         .lock()
         .ok()
-        .and_then(|lines| lines.iter().rev().find(|line| line.contains("ERROR:")).cloned())
+        .and_then(|lines| {
+            lines
+                .iter()
+                .rev()
+                .find(|line| line.contains("ERROR:"))
+                .cloned()
+        })
         .or_else(|| {
             tail.lock().ok().and_then(|lines| {
                 let text = lines
@@ -500,7 +523,11 @@ fn run_yt_dlp(
                     .rev()
                     .collect::<Vec<_>>()
                     .join(" | ");
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
         })
         .unwrap_or_else(|| format!("yt-dlp exited with status {status}"));
@@ -535,13 +562,22 @@ fn spawn_output_reader<R: Read + Send + 'static>(
 }
 
 fn select_targets(payload: &DownloadPayload) -> Vec<DownloadTarget> {
-    let page_url = payload.page_url.as_deref().filter(|value| is_http_url(value));
-    let media_url = payload.media_url.as_deref().filter(|value| is_http_url(value));
+    let page_url = payload
+        .page_url
+        .as_deref()
+        .filter(|value| is_http_url(value));
+    let media_url = payload
+        .media_url
+        .as_deref()
+        .filter(|value| is_http_url(value));
     let prefer_page = payload.prefer_page_url.unwrap_or(true);
     let mut targets = Vec::new();
 
     let mut push_unique = |url: &str, referer: Option<&str>| {
-        if targets.iter().any(|target: &DownloadTarget| target.url == url) {
+        if targets
+            .iter()
+            .any(|target: &DownloadTarget| target.url == url)
+        {
             return;
         }
         targets.push(DownloadTarget {
@@ -573,6 +609,7 @@ fn resolve_tools() -> ToolStatus {
     ToolStatus {
         yt_dlp: find_tool("yt-dlp.exe"),
         ffmpeg: find_tool("ffmpeg.exe"),
+        ffprobe: find_tool("ffprobe.exe"),
     }
 }
 
@@ -583,6 +620,9 @@ fn missing_tools(tools: &ToolStatus) -> Vec<&'static str> {
     }
     if tools.ffmpeg.is_none() {
         missing.push("ffmpeg.exe");
+    }
+    if tools.ffprobe.is_none() {
+        missing.push("ffprobe.exe");
     }
     missing
 }
@@ -687,7 +727,10 @@ fn parse_progress_percent(line: &str) -> Option<f64> {
         .map(|index| index + 1)
         .unwrap_or(0);
     let number = before[start..].trim();
-    number.parse::<f64>().ok().filter(|value| (0.0..=100.0).contains(value))
+    number
+        .parse::<f64>()
+        .ok()
+        .filter(|value| (0.0..=100.0).contains(value))
 }
 
 fn now_millis() -> u128 {
@@ -760,7 +803,10 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].url, "https://example.com/watch/1");
         assert_eq!(targets[1].url, "https://cdn.example.com/video.mp4");
-        assert_eq!(targets[1].referer.as_deref(), Some("https://example.com/watch/1"));
+        assert_eq!(
+            targets[1].referer.as_deref(),
+            Some("https://example.com/watch/1")
+        );
     }
 
     #[test]

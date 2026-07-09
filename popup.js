@@ -460,7 +460,7 @@ async function setCookiePref(host, enabled) {
 }
 
 function nativeToolsReady(status = state.nativeStatus) {
-  return Boolean(status?.tools?.ok || (status?.tools?.ytDlp?.found && status?.tools?.ffmpeg?.found));
+  return Boolean(status?.tools?.ok || (status?.tools?.ytDlp?.found && status?.tools?.ffmpeg?.found && status?.tools?.ffprobe?.found));
 }
 
 function renderNativeStatus(status) {
@@ -483,7 +483,7 @@ function renderNativeStatus(status) {
   if (activeJob) {
     elements.nativeStatusText.textContent = `Descargando: ${sanitizeText(activeJob.title || 'video', 120)}`;
   } else if (toolsReady) {
-    elements.nativeStatusText.textContent = 'Host Pro listo para yt-dlp + ffmpeg.';
+    elements.nativeStatusText.textContent = 'Host Pro listo para yt-dlp + ffmpeg/ffprobe.';
   } else if (status?.connected || status?.installed) {
     elements.nativeStatusText.textContent = status?.lastError || 'Host instalado, pero faltan herramientas.';
   } else {
@@ -493,8 +493,8 @@ function renderNativeStatus(status) {
   if (status?.tools) {
     const missing = Array.isArray(status.tools.missing) ? status.tools.missing.join(', ') : '';
     elements.nativeToolsText.textContent = toolsReady
-      ? 'Herramientas detectadas: yt-dlp y ffmpeg.'
-      : `Faltan: ${missing || 'yt-dlp.exe / ffmpeg.exe'}.`;
+      ? 'Herramientas detectadas: yt-dlp, ffmpeg y ffprobe.'
+      : `Faltan: ${missing || 'yt-dlp.exe / ffmpeg.exe / ffprobe.exe'}.`;
   } else {
     elements.nativeToolsText.textContent = 'Usa Verificar Pro despues de instalar el host local.';
   }
@@ -536,7 +536,7 @@ function startNativePolling() {
 async function startNativeDownload(video, useCookies) {
   const check = nativeToolsReady() ? { ok: true } : await loadNativeStatus(true);
   if (!nativeToolsReady(check?.state || state.nativeStatus)) {
-    showStatus('Instala o verifica el host Pro con yt-dlp y ffmpeg antes de usar esta descarga.', 'error', 4200);
+    showStatus('Instala o verifica el host Pro con yt-dlp, ffmpeg y ffprobe antes de usar esta descarga.', 'error', 4200);
     return;
   }
 
@@ -713,7 +713,7 @@ function renderList(videos) {
       await startNativeDownload(video, cookieInput.checked);
       proButton.disabled = false;
     }, 'pro');
-    proButton.title = 'Usa yt-dlp + ffmpeg mediante el host local opcional.';
+    proButton.title = 'Usa yt-dlp + ffmpeg/ffprobe mediante el host local opcional.';
     proButton.disabled = Boolean(state.nativeStatus?.activeJob);
 
     actionsRow.append(copyButton, previewButton, actionButton, proButton, cookieToggle);
@@ -878,7 +878,7 @@ elements.nativeCheck.addEventListener('click', async () => {
   elements.nativeCheck.disabled = Boolean(response?.state?.activeJob);
 
   if (nativeToolsReady(response?.state)) {
-    showStatus('Host Pro verificado: yt-dlp y ffmpeg listos.', 'ok');
+    showStatus('Host Pro verificado: yt-dlp, ffmpeg y ffprobe listos.', 'ok');
   } else {
     showStatus(response?.error || response?.state?.lastError || 'Host Pro no esta listo.', 'error', 4200);
   }

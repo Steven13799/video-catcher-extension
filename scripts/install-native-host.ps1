@@ -52,7 +52,8 @@ function Ensure-HostBuilt {
 function Ensure-ToolsDownloaded {
   $ytDlp = Join-Path $repoRoot "native-host\tools\yt-dlp.exe"
   $ffmpeg = Join-Path $repoRoot "native-host\tools\ffmpeg.exe"
-  if ((Test-Path -LiteralPath $ytDlp) -and (Test-Path -LiteralPath $ffmpeg)) {
+  $ffprobe = Join-Path $repoRoot "native-host\tools\ffprobe.exe"
+  if ((Test-Path -LiteralPath $ytDlp) -and (Test-Path -LiteralPath $ffmpeg) -and (Test-Path -LiteralPath $ffprobe)) {
     return
   }
 
@@ -85,10 +86,18 @@ $ffmpegExe = Find-FirstExisting @(
   (Find-CommandPath "ffmpeg.exe")
 ) "ffmpeg.exe"
 
+$ffprobeExe = Find-FirstExisting @(
+  (Join-Path $repoRoot "native-host\tools\ffprobe.exe"),
+  (Join-Path $repoRoot "native-host\ffprobe.exe"),
+  (Join-Path $repoRoot "tools\ffprobe.exe"),
+  (Find-CommandPath "ffprobe.exe")
+) "ffprobe.exe"
+
 New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 Copy-Item -LiteralPath $hostExe -Destination (Join-Path $installDir "video-catcher-host.exe") -Force
 Copy-Item -LiteralPath $ytDlpExe -Destination (Join-Path $installDir "yt-dlp.exe") -Force
 Copy-Item -LiteralPath $ffmpegExe -Destination (Join-Path $installDir "ffmpeg.exe") -Force
+Copy-Item -LiteralPath $ffprobeExe -Destination (Join-Path $installDir "ffprobe.exe") -Force
 
 $installedHost = Join-Path $installDir "video-catcher-host.exe"
 $escapedHost = $installedHost.Replace("\", "\\")

@@ -1,13 +1,13 @@
-# Native Host: yt-dlp + ffmpeg
+# Native Host: yt-dlp + ffmpeg/ffprobe
 
-Video Catcher can optionally use a local Native Messaging host to run `yt-dlp` and `ffmpeg`. This is the recommended path for sites that do not expose a simple downloadable media file, such as YouTube, TikTok, X/Twitter, Facebook, Instagram, Vimeo and other extractor-supported platforms.
+Video Catcher can optionally use a local Native Messaging host to run `yt-dlp`, `ffmpeg` and `ffprobe`. This is the recommended path for sites that do not expose a simple downloadable media file, such as YouTube, TikTok, X/Twitter, Facebook, Instagram, Vimeo and other extractor-supported platforms.
 
 The browser extension still works without this host. In that case it keeps using direct download, HLS fetch and recording.
 
 ## What It Does
 
 - Runs `yt-dlp.exe` locally from the extension popup.
-- Uses `ffmpeg.exe` for muxing, merging and remuxing streams.
+- Uses `ffmpeg.exe` and `ffprobe.exe` for muxing, merging, remuxing and stream inspection.
 - Prioritizes compatible MP4 downloads: H.264/AVC video plus AAC/M4A audio when available.
 - Saves files by default to `%USERPROFILE%\Downloads\Video Catcher`.
 - Supports canceling the active Pro download.
@@ -24,7 +24,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-native-host.ps1 -Brow
 The installer will:
 
 - Build `native-host\target\release\video-catcher-host.exe` if Cargo is available.
-- Download `yt-dlp.exe` and `ffmpeg.exe` into `native-host\tools` if they are missing.
+- Download `yt-dlp.exe`, `ffmpeg.exe` and `ffprobe.exe` into `native-host\tools` if they are missing.
 - Copy the host and tools to `%LOCALAPPDATA%\VideoCatcher\NativeHost`.
 - Register the Native Messaging manifest for Brave and Chrome under `HKCU`.
 
@@ -35,7 +35,7 @@ Restart Brave or Chrome after installing the host.
 1. Load the extension unpacked from this repository folder.
 2. Open the popup.
 3. Press `Verificar Pro`.
-4. The panel should report `Host Pro listo para yt-dlp + ffmpeg`.
+4. The panel should report `Host Pro listo para yt-dlp + ffmpeg/ffprobe`.
 
 The extension ID is pinned by `manifest.json`:
 
@@ -79,7 +79,7 @@ The release zip is created in `.release\` and includes:
 
 - The extension files.
 - The compiled native host binary.
-- `yt-dlp.exe` and `ffmpeg.exe`.
+- `yt-dlp.exe`, `ffmpeg.exe` and `ffprobe.exe`.
 - Install/uninstall scripts.
 - Native host documentation.
 

@@ -334,6 +334,7 @@ function handleNativeMessage(message) {
       ok: Boolean(message.ok),
       ytDlp: asToolInfo(message.ytDlp),
       ffmpeg: asToolInfo(message.ffmpeg),
+      ffprobe: asToolInfo(message.ffprobe),
       missing: Array.isArray(message.missing) ? message.missing.map((item) => sanitizeText(item, 40)) : []
     };
     nativeState.lastChecked = Date.now();

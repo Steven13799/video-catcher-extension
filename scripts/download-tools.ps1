@@ -14,6 +14,7 @@ $ytDlpPath = Join-Path $OutDir "yt-dlp.exe"
 $ffmpegZip = Join-Path $OutDir "ffmpeg-release-essentials.zip"
 $ffmpegExtract = Join-Path $OutDir "ffmpeg-extract"
 $ffmpegPath = Join-Path $OutDir "ffmpeg.exe"
+$ffprobePath = Join-Path $OutDir "ffprobe.exe"
 
 function Find-CommandPath([string]$Name) {
   $command = Get-Command $Name -ErrorAction SilentlyContinue
@@ -23,15 +24,15 @@ function Find-CommandPath([string]$Name) {
   return $null
 }
 
-function Find-ExistingFfmpeg {
-  $pathCommand = Find-CommandPath "ffmpeg.exe"
+function Find-ExistingFfmpegTool([string]$Name) {
+  $pathCommand = Find-CommandPath $Name
   if ($pathCommand) {
     return $pathCommand
   }
 
   $wingetPackages = Join-Path $env:LOCALAPPDATA "Microsoft\WinGet\Packages"
   if (Test-Path -LiteralPath $wingetPackages) {
-    $candidate = Get-ChildItem -Path $wingetPackages -Recurse -Filter "ffmpeg.exe" -ErrorAction SilentlyContinue |
+    $candidate = Get-ChildItem -Path $wingetPackages -Recurse -Filter $Name -ErrorAction SilentlyContinue |
       Select-Object -First 1
     if ($candidate) {
       return $candidate.FullName
@@ -53,7 +54,7 @@ if (-not (Test-Path $ytDlpPath)) {
 }
 
 if (-not (Test-Path $ffmpegPath)) {
-  $existingFfmpeg = Find-ExistingFfmpeg
+  $existingFfmpeg = Find-ExistingFfmpegTool "ffmpeg.exe"
   if ($existingFfmpeg) {
     Write-Host "Copying existing ffmpeg from $existingFfmpeg"
     Copy-Item -LiteralPath $existingFfmpeg -Destination $ffmpegPath -Force
@@ -69,6 +70,28 @@ if (-not (Test-Path $ffmpegPath)) {
       throw "ffmpeg.exe was not found inside the downloaded archive."
     }
     Copy-Item -LiteralPath $candidate.FullName -Destination $ffmpegPath -Force
+    Remove-Item -LiteralPath $ffmpegZip -Force
+    Remove-Item -LiteralPath $ffmpegExtract -Recurse -Force
+  }
+}
+
+if (-not (Test-Path $ffprobePath)) {
+  $existingFfprobe = Find-ExistingFfmpegTool "ffprobe.exe"
+  if ($existingFfprobe) {
+    Write-Host "Copying existing ffprobe from $existingFfprobe"
+    Copy-Item -LiteralPath $existingFfprobe -Destination $ffprobePath -Force
+  } else {
+    Write-Host "Downloading ffmpeg essentials for ffprobe..."
+    Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $ffmpegZip
+    if (Test-Path $ffmpegExtract) {
+      Remove-Item -LiteralPath $ffmpegExtract -Recurse -Force
+    }
+    Expand-Archive -LiteralPath $ffmpegZip -DestinationPath $ffmpegExtract -Force
+    $candidate = Get-ChildItem -Path $ffmpegExtract -Recurse -Filter "ffprobe.exe" | Select-Object -First 1
+    if (-not $candidate) {
+      throw "ffprobe.exe was not found inside the downloaded archive."
+    }
+    Copy-Item -LiteralPath $candidate.FullName -Destination $ffprobePath -Force
     Remove-Item -LiteralPath $ffmpegZip -Force
     Remove-Item -LiteralPath $ffmpegExtract -Recurse -Force
   }

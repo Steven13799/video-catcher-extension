@@ -12,7 +12,7 @@ The project is designed for personal backups, debugging media delivery, and legi
 - Downloads direct resources through `chrome.downloads` first.
 - Downloads simple unencrypted HLS playlists (`.m3u8`) by concatenating segments.
 - Falls back to recording the main `<video>` element with `MediaRecorder` when direct download is not possible.
-- Optional `Descargar Pro` mode through a local Native Messaging host with `yt-dlp` and `ffmpeg`.
+- Optional `Descargar Pro` mode through a local Native Messaging host with `yt-dlp`, `ffmpeg` and `ffprobe`.
 - Per-site cookie opt-in for Pro downloads using Brave cookies locally.
 - Provides a popup UI with safe DOM rendering and debug logs.
 
@@ -38,7 +38,7 @@ Then restart Brave/Chrome and press `Verificar Pro` in the popup. More details a
 
 - `Descargar`: starts a direct browser download.
 - `Descargar HLS`: downloads a simple unencrypted HLS playlist.
-- `Descargar Pro`: uses local `yt-dlp` + `ffmpeg` through the optional native host and prioritizes compatible MP4 output.
+- `Descargar Pro`: uses local `yt-dlp` + `ffmpeg`/`ffprobe` through the optional native host and prioritizes compatible MP4 output with audio.
 - `Cookies`: opt-in per site for `yt-dlp --cookies-from-browser brave`.
 - `Grabar`: records the currently selected/main video element in the active tab.
 - `Preview`: attempts to preview direct video URLs.
@@ -51,7 +51,7 @@ Then restart Brave/Chrome and press `Verificar Pro` in the popup. More details a
 - DASH/MPD is detected; use Pro mode or recording when browser direct download cannot handle it.
 - Some platforms change media delivery frequently, so detection may need updates.
 - Downloads may fail when a resource requires short-lived signed URLs, cookies, referer checks, range requests, or anti-automation logic.
-- Pro mode depends on current `yt-dlp` extractor support and local `ffmpeg`.
+- Pro mode depends on current `yt-dlp` extractor support and local `ffmpeg`/`ffprobe`.
 - Recording depends on browser support for `HTMLMediaElement.captureStream()`.
 
 ## Legal Notice
@@ -67,7 +67,7 @@ Use this project only with content you own, content you are authorized to downlo
 - `injected.js`: page-context hooks for fetch/XHR/media assignment.
 - `popup.html` / `popup.js`: popup interface.
 - `icons/`: generated extension icons.
-- `native-host/`: Rust Native Messaging host for `yt-dlp` + `ffmpeg`.
+- `native-host/`: Rust Native Messaging host for `yt-dlp` + `ffmpeg`/`ffprobe`.
 - `scripts/`: install, uninstall, tool download, and release packaging helpers.
 - `docs/`: operational documentation.
 - `tests/`: local tests and Brave smoke test.
