@@ -1,7 +1,8 @@
 param(
   [ValidateSet("Brave", "Chrome", "Both")]
   [string]$Browser = "Both",
-  [string]$ExtensionId = "jjmpkelicjdcdmiiiopaipbpcbnnfalj"
+  [string]$ExtensionId = "jjmpkelicjdcdmiiiopaipbpcbnnfalj",
+  [switch]$RefreshYtDlp
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,10 +35,6 @@ function Find-FirstExisting([string[]]$Candidates, [string]$Name) {
 
 function Ensure-HostBuilt {
   $releaseHost = Join-Path $repoRoot "native-host\target\release\video-catcher-host.exe"
-  if (Test-Path -LiteralPath $releaseHost) {
-    return
-  }
-
   $cargoToml = Join-Path $repoRoot "native-host\Cargo.toml"
   if ((Test-Path -LiteralPath $cargoToml) -and (Get-Command cargo -ErrorAction SilentlyContinue)) {
     Push-Location (Join-Path $repoRoot "native-host")
@@ -46,19 +43,28 @@ function Ensure-HostBuilt {
     } finally {
       Pop-Location
     }
+    return
+  }
+
+  if (-not (Test-Path -LiteralPath $releaseHost)) {
+    throw "video-catcher-host.exe not found and Cargo is unavailable. See docs/native-host.md."
   }
 }
 
 function Ensure-ToolsDownloaded {
-  $ytDlp = Join-Path $repoRoot "native-host\tools\yt-dlp.exe"
-  $ffmpeg = Join-Path $repoRoot "native-host\tools\ffmpeg.exe"
-  $ffprobe = Join-Path $repoRoot "native-host\tools\ffprobe.exe"
-  if ((Test-Path -LiteralPath $ytDlp) -and (Test-Path -LiteralPath $ffmpeg) -and (Test-Path -LiteralPath $ffprobe)) {
-    return
+  $downloadScript = Join-Path $PSScriptRoot "download-tools.ps1"
+  if ($RefreshYtDlp) {
+    & $downloadScript -RefreshYtDlp -YtDlpOnly
   }
 
-  $downloadScript = Join-Path $PSScriptRoot "download-tools.ps1"
-  if (Test-Path -LiteralPath $downloadScript) {
+  $ytDlpPresent = (Test-Path -LiteralPath (Join-Path $repoRoot "native-host\tools\yt-dlp.exe")) -or
+    (Test-Path -LiteralPath (Join-Path $repoRoot "native-host\yt-dlp.exe"))
+  $ffmpegPresent = (Test-Path -LiteralPath (Join-Path $repoRoot "native-host\tools\ffmpeg.exe")) -or
+    (Test-Path -LiteralPath (Join-Path $repoRoot "native-host\ffmpeg.exe"))
+  $ffprobePresent = (Test-Path -LiteralPath (Join-Path $repoRoot "native-host\tools\ffprobe.exe")) -or
+    (Test-Path -LiteralPath (Join-Path $repoRoot "native-host\ffprobe.exe"))
+
+  if (-not ($ytDlpPresent -and $ffmpegPresent -and $ffprobePresent)) {
     & $downloadScript
   }
 }

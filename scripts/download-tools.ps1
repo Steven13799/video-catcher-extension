@@ -1,5 +1,7 @@
 param(
-  [string]$OutDir = ""
+  [string]$OutDir = "",
+  [switch]$RefreshYtDlp,
+  [switch]$YtDlpOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +13,8 @@ if (-not $OutDir) {
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
 $ytDlpPath = Join-Path $OutDir "yt-dlp.exe"
+$ytDlpDownload = Join-Path $OutDir "yt-dlp.download.exe"
+$ytDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 $ffmpegZip = Join-Path $OutDir "ffmpeg-release-essentials.zip"
 $ffmpegExtract = Join-Path $OutDir "ffmpeg-extract"
 $ffmpegPath = Join-Path $OutDir "ffmpeg.exe"
@@ -42,15 +46,40 @@ function Find-ExistingFfmpegTool([string]$Name) {
   return $null
 }
 
-if (-not (Test-Path $ytDlpPath)) {
-  $existingYtDlp = Find-CommandPath "yt-dlp.exe"
-  if ($existingYtDlp) {
-    Write-Host "Copying existing yt-dlp from $existingYtDlp"
-    Copy-Item -LiteralPath $existingYtDlp -Destination $ytDlpPath -Force
-  } else {
-    Write-Host "Downloading yt-dlp..."
-    Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile $ytDlpPath
+function Install-StandaloneYtDlp {
+  if (Test-Path -LiteralPath $ytDlpDownload) {
+    Remove-Item -LiteralPath $ytDlpDownload -Force
   }
+
+  Write-Host "Downloading the official standalone yt-dlp executable..."
+  Invoke-WebRequest -Uri $ytDlpUrl -OutFile $ytDlpDownload
+  Unblock-File -LiteralPath $ytDlpDownload
+
+  $versionOutput = & $ytDlpDownload --version 2>&1
+  $versionExitCode = $LASTEXITCODE
+  $version = [string]($versionOutput | Select-Object -First 1)
+  $version = $version.Trim()
+  if ($versionExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
+    Remove-Item -LiteralPath $ytDlpDownload -Force -ErrorAction SilentlyContinue
+    throw "The downloaded yt-dlp.exe did not pass its version check."
+  }
+
+  Move-Item -LiteralPath $ytDlpDownload -Destination $ytDlpPath -Force
+  Write-Host "yt-dlp $version installed at $ytDlpPath"
+}
+
+if ($RefreshYtDlp -or -not (Test-Path -LiteralPath $ytDlpPath)) {
+  Install-StandaloneYtDlp
+} else {
+  $currentVersionOutput = & $ytDlpPath --version 2>&1
+  $currentYtDlpVersion = [string]($currentVersionOutput | Select-Object -First 1)
+  $currentYtDlpVersion = $currentYtDlpVersion.Trim()
+  Write-Host "Using existing yt-dlp $currentYtDlpVersion"
+}
+
+if ($YtDlpOnly) {
+  Write-Host "yt-dlp ready in $OutDir"
+  exit 0
 }
 
 if (-not (Test-Path $ffmpegPath)) {
