@@ -407,17 +407,34 @@ function nativeToolsReady(status = state.nativeStatus) {
   return Boolean(status?.tools?.ok || (status?.tools?.ytDlp?.found && status?.tools?.ffmpeg?.found && status?.tools?.ffprobe?.found));
 }
 
+function nativeTikTokUpdateRequired(status = state.nativeStatus) {
+  return Boolean(status?.tools?.ytDlp?.tiktokUpdateRequired);
+}
+
+function isTikTokPage(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === 'tiktok.com' || host.endsWith('.tiktok.com') || host.endsWith('.tiktokv.com');
+  } catch {
+    return false;
+  }
+}
+
 function renderNativeStatus(status) {
   state.nativeStatus = status || null;
   const activeJob = status?.activeJob || null;
   const progress = status?.lastProgress || null;
   const toolsReady = nativeToolsReady(status);
+  const updateRequired = nativeTikTokUpdateRequired(status);
+  const ytDlpVersion = sanitizeText(status?.tools?.ytDlp?.version || '', 64);
 
   elements.nativeDot.className = 'native-dot';
   if (activeJob) {
     elements.nativeDot.classList.add('busy');
-  } else if (toolsReady) {
+  } else if (toolsReady && !updateRequired) {
     elements.nativeDot.classList.add('ready');
+  } else if (toolsReady && updateRequired) {
+    elements.nativeDot.classList.add('warn');
   } else if (status?.connected || status?.installed) {
     elements.nativeDot.classList.add('warn');
   } else if (status?.lastError) {
@@ -426,6 +443,8 @@ function renderNativeStatus(status) {
 
   if (activeJob) {
     elements.nativeStatusText.textContent = `Descargando: ${sanitizeText(activeJob.title || 'video', 120)}`;
+  } else if (toolsReady && updateRequired) {
+    elements.nativeStatusText.textContent = 'Host Pro instalado; actualiza yt-dlp para descargar desde TikTok.';
   } else if (toolsReady) {
     elements.nativeStatusText.textContent = 'Host Pro listo para yt-dlp + ffmpeg/ffprobe.';
   } else if (status?.connected || status?.installed) {
@@ -437,7 +456,7 @@ function renderNativeStatus(status) {
   if (status?.tools) {
     const missing = Array.isArray(status.tools.missing) ? status.tools.missing.join(', ') : '';
     elements.nativeToolsText.textContent = toolsReady
-      ? 'Herramientas detectadas: yt-dlp, ffmpeg y ffprobe.'
+      ? `Herramientas detectadas: yt-dlp${ytDlpVersion ? ` ${ytDlpVersion}` : ''}, ffmpeg y ffprobe.`
       : `Faltan: ${missing || 'yt-dlp.exe / ffmpeg.exe / ffprobe.exe'}.`;
   } else {
     elements.nativeToolsText.textContent = 'Usa Verificar Pro despues de instalar el host local.';
@@ -479,8 +498,18 @@ function startNativePolling() {
 
 async function startNativeDownload(video, useCookies) {
   const check = nativeToolsReady() ? { ok: true } : await loadNativeStatus(true);
-  if (!nativeToolsReady(check?.state || state.nativeStatus)) {
+  const checkedStatus = check?.state || state.nativeStatus;
+  if (!nativeToolsReady(checkedStatus)) {
     showStatus('Instala o verifica el host Pro con yt-dlp, ffmpeg y ffprobe antes de usar esta descarga.', 'error', 4200);
+    return;
+  }
+
+  if (
+    nativeTikTokUpdateRequired(checkedStatus) &&
+    (isTikTokPage(state.activeTabUrl) || isTikTokPage(video.url))
+  ) {
+    const minimum = sanitizeText(checkedStatus?.tools?.ytDlp?.minimumTikTokVersion || '2026.08.19', 32);
+    showStatus(`TikTok requiere yt-dlp ${minimum} o posterior. Actualiza el host Pro y vuelve a intentarlo.`, 'error', 5200);
     return;
   }
 
@@ -821,7 +850,10 @@ elements.nativeCheck.addEventListener('click', async () => {
   const response = await loadNativeStatus(true);
   elements.nativeCheck.disabled = Boolean(response?.state?.activeJob);
 
-  if (nativeToolsReady(response?.state)) {
+  if (nativeTikTokUpdateRequired(response?.state)) {
+    const version = sanitizeText(response?.state?.tools?.ytDlp?.version || 'antiguo', 64);
+    showStatus(`Host detectado, pero yt-dlp ${version} necesita actualizarse para TikTok.`, 'error', 5200);
+  } else if (nativeToolsReady(response?.state)) {
     showStatus('Host Pro verificado: yt-dlp, ffmpeg y ffprobe listos.', 'ok');
   } else {
     showStatus(response?.error || response?.state?.lastError || 'Host Pro no esta listo.', 'error', 4200);

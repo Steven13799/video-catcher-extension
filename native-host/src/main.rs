@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
+const TIKTOK_MIN_YT_DLP_VERSION: &str = "2026.08.19";
 const COMPATIBLE_FORMAT_SELECTOR: &str =
     "b[ext=mp4][vcodec*=avc1][acodec!=none]/b[ext=mp4][vcodec*=h264][acodec!=none]/b[ext=mp4][acodec!=none][vcodec!=none]/bv*[vcodec*=avc1]+ba[acodec^=mp4a]/bv*[vcodec*=h264]+ba[acodec^=mp4a]/bv*[ext=mp4][vcodec!*=av01]+ba[ext=m4a]/b[ext=mp4]/best[ext=mp4]/best";
 
@@ -347,6 +349,10 @@ fn handle_cancel(
 
 fn send_tool_status(writer: &SharedWriter, request_id: Option<&str>, tools: &ToolStatus) {
     let missing = missing_tools(tools);
+    let yt_dlp_version = read_tool_version(tools.yt_dlp.as_deref());
+    let tiktok_update_required = yt_dlp_version
+        .as_deref()
+        .is_some_and(|version| !version_at_least(version, TIKTOK_MIN_YT_DLP_VERSION));
     send_message(
         writer,
         &json!({
@@ -356,7 +362,10 @@ fn send_tool_status(writer: &SharedWriter, request_id: Option<&str>, tools: &Too
             "hostVersion": HOST_VERSION,
             "ytDlp": {
                 "found": tools.yt_dlp.is_some(),
-                "path": tools.yt_dlp.as_ref().map(|path| path.to_string_lossy().to_string())
+                "path": tools.yt_dlp.as_ref().map(|path| path.to_string_lossy().to_string()),
+                "version": yt_dlp_version,
+                "tiktokUpdateRequired": tiktok_update_required,
+                "minimumTikTokVersion": TIKTOK_MIN_YT_DLP_VERSION
             },
             "ffmpeg": {
                 "found": tools.ffmpeg.is_some(),
@@ -395,6 +404,51 @@ fn send_progress(writer: &SharedWriter, job_id: &str, line: &str, percent: Optio
 }
 
 fn run_yt_dlp(
+    job_id: &str,
+    payload: &DownloadPayload,
+    target: &DownloadTarget,
+    output_dir: &Path,
+    tools: &ToolStatus,
+    writer: SharedWriter,
+    state: SharedState,
+) -> RunResult {
+    const MAX_TIKTOK_ATTEMPTS: u32 = 3;
+
+    for attempt in 1..=MAX_TIKTOK_ATTEMPTS {
+        let result = run_yt_dlp_once(
+            job_id,
+            payload,
+            target,
+            output_dir,
+            tools,
+            Arc::clone(&writer),
+            Arc::clone(&state),
+        );
+
+        match result {
+            RunResult::Failed(error)
+                if attempt < MAX_TIKTOK_ATTEMPTS
+                    && is_transient_tiktok_error(&target.url, &error) =>
+            {
+                send_progress(
+                    &writer,
+                    job_id,
+                    &format!(
+                        "TikTok devolvio una respuesta temporal incompleta. Reintentando ({}/{MAX_TIKTOK_ATTEMPTS})...",
+                        attempt + 1
+                    ),
+                    None,
+                );
+                thread::sleep(Duration::from_secs(u64::from(attempt)));
+            }
+            other => return other,
+        }
+    }
+
+    unreachable!("the retry loop always returns on its final attempt")
+}
+
+fn run_yt_dlp_once(
     job_id: &str,
     payload: &DownloadPayload,
     target: &DownloadTarget,
@@ -532,7 +586,11 @@ fn run_yt_dlp(
         })
         .unwrap_or_else(|| format!("yt-dlp exited with status {status}"));
 
-    RunResult::Failed(summary)
+    RunResult::Failed(enrich_tiktok_error(
+        &target.url,
+        tools.yt_dlp.as_deref(),
+        summary,
+    ))
 }
 
 fn spawn_output_reader<R: Read + Send + 'static>(
@@ -625,6 +683,85 @@ fn missing_tools(tools: &ToolStatus) -> Vec<&'static str> {
         missing.push("ffprobe.exe");
     }
     missing
+}
+
+fn read_tool_version(path: Option<&Path>) -> Option<String> {
+    let output = Command::new(path?)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(64).collect())
+}
+
+fn parse_date_version(value: &str) -> Option<(u32, u32, u32)> {
+    value
+        .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .filter(|candidate| !candidate.is_empty())
+        .find_map(|candidate| {
+            let mut parts = candidate.split('.');
+            let year = parts.next()?.parse().ok()?;
+            let month = parts.next()?.parse().ok()?;
+            let day = parts.next()?.parse().ok()?;
+            Some((year, month, day))
+        })
+}
+
+fn version_at_least(version: &str, minimum: &str) -> bool {
+    match (parse_date_version(version), parse_date_version(minimum)) {
+        (Some(current), Some(required)) => current >= required,
+        _ => true,
+    }
+}
+
+fn is_tiktok_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("tiktok.com/")
+        || lower.contains("tiktokv.com/")
+        || lower.contains("tiktokcdn.com/")
+}
+
+fn is_transient_tiktok_error(url: &str, error: &str) -> bool {
+    if !is_tiktok_url(url) {
+        return false;
+    }
+
+    let lower = error.to_ascii_lowercase();
+    lower.contains("unable to extract universal data for rehydration")
+        || lower.contains("unexpected response from webpage request")
+        || lower.contains("http error 403")
+        || lower.contains("403: forbidden")
+}
+
+fn enrich_tiktok_error(url: &str, yt_dlp: Option<&Path>, error: String) -> String {
+    let lower = error.to_ascii_lowercase();
+    let challenge_error = lower.contains("http error 403")
+        || lower.contains("unexpected response from webpage request")
+        || lower.contains("403: forbidden");
+    if !is_tiktok_url(url) || !challenge_error {
+        return error;
+    }
+
+    let Some(version) = read_tool_version(yt_dlp) else {
+        return error;
+    };
+    if version_at_least(&version, TIKTOK_MIN_YT_DLP_VERSION) {
+        return error;
+    }
+
+    format!(
+        "TikTok rechazo la solicitud porque yt-dlp {version} esta desactualizado. Se requiere {TIKTOK_MIN_YT_DLP_VERSION} o posterior. Ejecuta scripts\\install-native-host.ps1 -RefreshYtDlp y vuelve a abrir el navegador. Error original: {error}"
+    )
 }
 
 fn find_tool(name: &str) -> Option<PathBuf> {
@@ -818,5 +955,41 @@ mod tests {
                 .to_string(),
             "C:\\Users\\Test\\Downloads"
         );
+    }
+
+    #[test]
+    fn compares_yt_dlp_date_versions() {
+        assert!(!version_at_least("2026.06.13.234541", "2026.08.19"));
+        assert!(version_at_least("2026.08.19", "2026.08.19"));
+        assert!(version_at_least("nightly@2026.08.20.234504", "2026.08.19"));
+    }
+
+    #[test]
+    fn recognizes_tiktok_hosts() {
+        assert!(is_tiktok_url(
+            "https://www.tiktok.com/@profesor.ec/video/7667439542613429525"
+        ));
+        assert!(!is_tiktok_url("https://example.com/video.mp4"));
+    }
+
+    #[test]
+    fn retries_only_transient_tiktok_errors() {
+        let tiktok = "https://www.tiktok.com/@profesor.ec/video/7667439542613429525";
+        assert!(is_transient_tiktok_error(
+            tiktok,
+            "ERROR: Unable to extract universal data for rehydration"
+        ));
+        assert!(is_transient_tiktok_error(
+            tiktok,
+            "Unable to download webpage: HTTP Error 403: Forbidden"
+        ));
+        assert!(!is_transient_tiktok_error(
+            "https://example.com/video.mp4",
+            "HTTP Error 403: Forbidden"
+        ));
+        assert!(!is_transient_tiktok_error(
+            tiktok,
+            "Requested format is not available"
+        ));
     }
 }
