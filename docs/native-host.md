@@ -30,6 +30,16 @@ The installer will:
 
 Restart Brave or Chrome after installing the host.
 
+## Update yt-dlp
+
+TikTok and other sites change their delivery frequently. Refresh the standalone `yt-dlp.exe` and reinstall the host with one command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-native-host.ps1 -Browser Both -RefreshYtDlp
+```
+
+The updater downloads the latest official stable Windows executable instead of copying a Python launcher. The popup displays the installed `yt-dlp` version after `Verificar Pro`.
+
 ## Verify
 
 1. Load the extension unpacked from this repository folder.
@@ -60,6 +70,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-native-host.ps1 -Exte
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\download-tools.ps1
 ```
+
+Use `-RefreshYtDlp` to replace an existing copy with the latest official stable release.
 
 This stores the tools in:
 

@@ -34,6 +34,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-native-host.ps1 -Brow
 
 Then restart Brave/Chrome and press `Verificar Pro` in the popup. More details are in [docs/native-host.md](docs/native-host.md).
 
+To refresh `yt-dlp` when a supported site changes its extractor behavior:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-native-host.ps1 -Browser Both -RefreshYtDlp
+```
+
 ## Usage
 
 - `Descargar`: starts a direct browser download.

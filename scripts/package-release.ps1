@@ -18,7 +18,7 @@ try {
 }
 
 if (-not $SkipToolDownload) {
-  & (Join-Path $PSScriptRoot "download-tools.ps1")
+  & (Join-Path $PSScriptRoot "download-tools.ps1") -RefreshYtDlp
 }
 
 $releaseRoot = Join-Path $repoRoot ".release"
