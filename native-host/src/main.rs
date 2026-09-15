@@ -501,15 +501,18 @@ fn run_yt_dlp_once(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => return RunResult::Failed(format!("cannot start yt-dlp: {error}")),
-    };
-
-    {
+    let mut child = {
         let mut locked = state.lock().expect("state lock poisoned");
+        if locked.cancelled_jobs.contains(job_id) {
+            return RunResult::Cancelled;
+        }
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => return RunResult::Failed(format!("cannot start yt-dlp: {error}")),
+        };
         locked.active_pid = Some(child.id());
-    }
+        child
+    };
 
     let tail = Arc::new(Mutex::new(Vec::<String>::new()));
     let stdout_thread = child.stdout.take().map(|stdout| {
@@ -962,6 +965,38 @@ mod tests {
         assert!(!version_at_least("2026.06.13.234541", "2026.08.19"));
         assert!(version_at_least("2026.08.19", "2026.08.19"));
         assert!(version_at_least("nightly@2026.08.20.234504", "2026.08.19"));
+    }
+
+    #[test]
+    fn cancelled_retry_does_not_launch_another_process() {
+        let state = Arc::new(Mutex::new(HostState::default()));
+        state
+            .lock()
+            .unwrap()
+            .cancelled_jobs
+            .insert("cancelled".into());
+        let payload: DownloadPayload = serde_json::from_str("{}").unwrap();
+        let target = DownloadTarget {
+            url: "https://www.tiktok.com/@test/video/123".into(),
+            referer: None,
+        };
+        // A spawn would fail with this nonexistent executable instead of cancelling.
+        let tools = ToolStatus {
+            yt_dlp: Some(PathBuf::from("nonexistent-test-yt-dlp.exe")),
+            ffmpeg: Some(PathBuf::from("nonexistent-test-ffmpeg.exe")),
+            ffprobe: None,
+        };
+        let result = run_yt_dlp(
+            "cancelled",
+            &payload,
+            &target,
+            Path::new("."),
+            &tools,
+            Arc::new(Mutex::new(io::stdout())),
+            Arc::clone(&state),
+        );
+        assert!(matches!(result, RunResult::Cancelled));
+        assert!(state.lock().unwrap().active_pid.is_none());
     }
 
     #[test]

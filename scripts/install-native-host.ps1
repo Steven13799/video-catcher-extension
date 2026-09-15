@@ -40,6 +40,9 @@ function Ensure-HostBuilt {
     Push-Location (Join-Path $repoRoot "native-host")
     try {
       cargo build --release
+      if ($LASTEXITCODE -ne 0) {
+        throw "Native host compilation failed (exit code $LASTEXITCODE). Installation stopped."
+      }
     } finally {
       Pop-Location
     }
